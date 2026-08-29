@@ -1,3 +1,4 @@
+from utils.list_apps import get_list_installed_apps
 from django.core.management.base import BaseCommand
 import speech_recognition 
 
@@ -32,3 +33,7 @@ class Command(BaseCommand):
 
         if "привіт" in lowered:
             self.stdout.write("Привіт, радий тебе бачити!")
+        if "додатки" in lowered:
+            self.stdout.write("Відкриваю список додатків...")
+            apps = get_list_installed_apps()
+            self.stdout.write(f"Встановлені додатки: {', '.join(apps.keys())}")
