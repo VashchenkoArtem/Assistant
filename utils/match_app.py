@@ -8,7 +8,7 @@ from core.models import AppCommand
 
 THRESHOLD = 0.45
 
-def get_known_app():
+def get_known_apps():
     apps = get_list_installed_apps()
 
     commands = AppCommand.objects.all()
