@@ -4,6 +4,7 @@ import speech_recognition
 from utils.match_app import get_known_apps, find_best_match
 import platform, os, subprocess
 from utils.voicing_answer import run_voice
+from utils.match_app import register_found_app
 
 
 class Command(BaseCommand):
@@ -69,9 +70,11 @@ class Command(BaseCommand):
             return 
         if is_open:
             run_voice(f"Відкриваю {name}")
+            register_found_app(name= name, path= path)
             self.open_app(path= path)
         else:
             run_voice(f"Закриваю {name}")
+            register_found_app(name= name, path= path)
             self.close_app(app_name= os.path.basename(path))
     
     def open_app(self, path):
