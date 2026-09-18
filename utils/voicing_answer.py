@@ -1,5 +1,7 @@
 import asyncio
 import os
+import queue
+import tempfile
 import threading
 import time
 
@@ -15,52 +17,91 @@ voice_profile = {
     "volume": "+0%",
 }
 
-pygame.mixer.init()
+VOICE_QUEUE = queue.Queue()
+MIXER_LOCK = threading.Lock()
+
+
+def _voice_worker():
+    while True:
+        text = VOICE_QUEUE.get()
+        if text is None:
+            VOICE_QUEUE.task_done()
+            break
+        try:
+            voicing_text(text)
+        finally:
+            VOICE_QUEUE.task_done()
+
 
 async def create_voice(text: str, file_name: str):
     ready_voice = edge_tts.Communicate(
-        text= text,
-        voice= voice_profile["voice"],
-        rate= voice_profile["rate"],
-        pitch= voice_profile["pitch"],
-        volume= voice_profile["volume"],
+        text=text,
+        voice=voice_profile["voice"],
+        rate=voice_profile["rate"],
+        pitch=voice_profile["pitch"],
+        volume=voice_profile["volume"],
     )
 
     await ready_voice.save(audio_fname=file_name)
 
 
 def voicing_text(text: str):
-    file_name = f"voice_temp_{threading.get_ident()}_{time.time()}.mp3"
+    file_descriptor, file_name = tempfile.mkstemp(suffix=".mp3", prefix="voice_")
+    os.close(file_descriptor)
+
     try:
         voicing_event_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(voicing_event_loop)
-
-        voicing_event_loop.run_until_complete(create_voice(text=text, file_name=file_name))
-        voicing_event_loop.close()
+        try:
+            voicing_event_loop.run_until_complete(create_voice(text=text, file_name=file_name))
+        finally:
+            voicing_event_loop.close()
+            asyncio.set_event_loop(None)
 
         if os.path.exists(file_name) and os.path.getsize(file_name) > 0:
-            pygame.mixer.music.load(filename=file_name)
-            pygame.mixer.music.play()
-            while pygame.mixer.music.get_busy():
-                time.sleep(0.2)
-            pygame.mixer.music.stop()
-            pygame.mixer.music.unload()
+            with MIXER_LOCK:
+                if not pygame.get_init() or not pygame.mixer.get_init():
+                    pygame.mixer.init()
+
+                sound = pygame.mixer.Sound(file_name)
+                channel = sound.play()
+
+                try:
+                    while channel is not None and channel.get_busy():
+                        time.sleep(0.1)
+                finally:
+                    try:
+                        sound.stop()
+                    except Exception:
+                        pass
+                    del sound
+                    pygame.mixer.stop()
 
     except Exception as e:
         print(f"Error playing file: {e}")
 
     finally:
-        for trying in range(5):
+        for attempt in range(10):
             try:
-                os.remove(file_name)
+                if os.path.exists(file_name):
+                    os.remove(file_name)
                 break
             except PermissionError:
                 time.sleep(0.1)
+            except FileNotFoundError:
+                break
 
 
-def run_voice(text: str):
+_voice_thread = threading.Thread(target=_voice_worker, daemon=True)
+_voice_thread.start()
+
+
+def run_voice(text: str, wait: bool = False):
     if not text or not text.strip():
         return
 
-    voicing_thread = threading.Thread(target=voicing_text, args=(text,), daemon=True)
-    voicing_thread.start()
+    if wait:
+        voicing_text(text)
+        return
+
+    VOICE_QUEUE.put(text)
