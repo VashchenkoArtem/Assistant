@@ -96,8 +96,17 @@ class Command(BaseCommand):
 
         apps = get_known_apps()
         name, path = find_best_match(word= target_word, apps= apps, threshold= 0.45)
-
-
+        is_unknown_app = is_unknown(name= name, path= path)
+        
+        if is_unknown_app:
+            run_voice(f"Чи дійсно це программа {name}?")
+            self.pending_app = {
+                "name": name,
+                "path": path,
+                "is_open": is_open,
+            }
+            return
+        
         if not name:
             run_voice(f"Я не знайшла програму схожу на {target_word}")
             return 

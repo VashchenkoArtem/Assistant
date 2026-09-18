@@ -45,9 +45,15 @@ def find_best_match(word, apps, threshold):
         return best_name, apps[best_name]
 
 
+def is_unknown(name, path):
+    if AppCommand.objects.filter(path= path).exists() or AppCommand.objects.filter(name= name).exists():
+        return False
+    return True
+
 
 
 def register_found_app(name, path):
-    AppCommand.objects.create(name= name, path= path, added_automatically= True)
-    
+    if is_unknown(name, path):
+        AppCommand.objects.create(name= name, path= path, added_automatically= True)
+    return
     
