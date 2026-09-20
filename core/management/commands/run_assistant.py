@@ -4,16 +4,20 @@ import speech_recognition
 from utils.match_app import get_known_apps, find_best_match
 import platform, os, subprocess
 from utils.voicing_answer import run_voice
-from utils.match_app import register_found_app
+from utils.match_app import register_found_app, is_unknown
 
+
+CONFIRM_WORDS = ("так", "да", "правильно", "точно", "вірно")
+DENY_WORDS = ("ні", "не", "неправильно")
 
 class Command(BaseCommand):
     def handle(self, *args, **kwargs):
 
         self.run = True
+        self.pending_app = None
+
         self.paused = False
         self.stdout.write(self.style.SUCCESS(f"Асистент почав роботу"))
-
         recognizer = speech_recognition.Recognizer()
         microphone = speech_recognition.Microphone()
 
@@ -45,6 +49,11 @@ class Command(BaseCommand):
     def doing_task(self, text):
         lowered = text.lower()
 
+        if self.pending_app:
+            self.handle_confirmation(lowered)
+            return
+        
+
         if any(keyword in lowered for keyword in ["пауза"]):
             self.pause_assistant()
             return
@@ -70,6 +79,30 @@ class Command(BaseCommand):
         if "відкрий" in lowered or "закрий" in lowered:
             self.handle_open_close(text= text, is_open= "відкрий" in lowered)
             return
+        
+    def handle_confirmation(self, text):
+        if text in CONFIRM_WORDS:
+            register_found_app(
+                name=self.pending_app["name"],
+                path=self.pending_app["path"]
+            )
+
+            if self.pending_app["is_open"]:
+                self.open_app(self.pending_app["path"])
+            else:
+                self.close_app(
+                    os.path.basename(self.pending_app["path"])
+                )
+
+            run_voice("Добре, запам'ятала")
+            self.pending_app = None
+            return
+
+        if text in DENY_WORDS:
+            run_voice("Тоді спробуй повторити команду ще раз")
+            self.pending_app = None
+            return
+        
 
     def pause_assistant(self):
         if self.paused:
@@ -106,6 +139,17 @@ class Command(BaseCommand):
 
         apps = get_known_apps()
         name, path = find_best_match(word= target_word, apps= apps, threshold= 0.45)
+        is_unknown_app = is_unknown(name= name, path= path)
+        
+        if is_unknown_app:
+            run_voice(f"Чи дійсно це программа {name}?")
+            self.pending_app = {
+                "name": name,
+                "path": path,
+                "is_open": is_open,
+            }
+            return
+        
         if not name:
             run_voice(f"Я не знайшла програму схожу на {target_word}")
             return 
