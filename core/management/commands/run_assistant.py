@@ -3,7 +3,7 @@ from django.core.management.base import BaseCommand
 import speech_recognition 
 from utils.match_app import get_known_apps, find_best_match
 import platform, os, subprocess
-from utils.voicing_answer import run_voice
+from utils.voicing_answer import run_voice, voicing_and_printing_answer
 from utils.match_app import register_found_app, is_unknown
 
 
@@ -45,11 +45,11 @@ class Command(BaseCommand):
             return
         
         if "привіт" in lowered:
-            run_voice("Привіт, радa тебе бачити!")
+            voicing_and_printing_answer("Привіт, радa тебе бачити!")
             return
 
         if "додатки" in lowered:
-            run_voice("Відкриваю список додатків...")
+            voicing_and_printing_answer("Відкриваю список додатків...")
             apps = get_list_installed_apps()
             self.stdout.write(f"Встановлені додатки: {', '.join(apps.keys())}")
             return
@@ -72,12 +72,12 @@ class Command(BaseCommand):
                     os.path.basename(self.pending_app["path"])
                 )
 
-            run_voice("Добре, запам'ятала")
+            voicing_and_printing_answer("Добре, запам'ятала")
             self.pending_app = None
             return
 
         if text in DENY_WORDS:
-            run_voice("Тоді спробуй повторити команду ще раз")
+            voicing_and_printing_answer("Тоді спробуй повторити команду ще раз")
             self.pending_app = None
             return
         
@@ -91,31 +91,33 @@ class Command(BaseCommand):
         target_word = text[start:].strip()
 
         if not target_word:
-            run_voice("Повторіть яку програму відкрити")
+            voicing_and_printing_answer("Повторіть яку програму відкрити")
             return 
-
+        voicing_and_printing_answer("Починаю шукати програму...")
         apps = get_known_apps()
         name, path = find_best_match(word= target_word, apps= apps, threshold= 0.45)
         is_unknown_app = is_unknown(name= name, path= path)
         
         if is_unknown_app:
-            run_voice(f"Чи дійсно це программа {name}?")
+            voicing_and_printing_answer(f"Чи правильно я почув назву? Назва програми: {name}?")
             self.pending_app = {
                 "name": name,
                 "path": path,
                 "is_open": is_open,
             }
             return
-        
+        if name:
+            voicing_and_printing_answer(f"Знайшла програму {name}")
+
         if not name:
-            run_voice(f"Я не знайшла програму схожу на {target_word}")
+            voicing_and_printing_answer(f"Я не знайшла програму схожу на {target_word}")
             return 
         if is_open:
-            run_voice(f"Відкриваю {name}")
+            voicing_and_printing_answer(f"Відкриваю {name}")
             register_found_app(name= name, path= path)
             self.open_app(path= path)
         else:
-            run_voice(f"Закриваю {name}")
+            voicing_and_printing_answer(f"Закриваю {name}")
             register_found_app(name= name, path= path)
             self.close_app(app_name= os.path.basename(path))
     

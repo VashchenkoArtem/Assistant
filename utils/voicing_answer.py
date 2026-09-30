@@ -64,3 +64,7 @@ def run_voice(text: str):
 
     voicing_thread = threading.Thread(target=voicing_text, args=(text,), daemon=True)
     voicing_thread.start()
+
+def voicing_and_printing_answer(text: str):
+    run_voice(text)
+    print(text)
