@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 import numpy as np
 
@@ -9,14 +9,17 @@ from .models import ResponseAnalysis, ResponseCategory, ResponseSource
 from .repository import ResponseRepository
 from .text_normalizer import TextNormalizer
 
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
+
 
 class SemanticAnalyzer:
     def __init__(self, repository: ResponseRepository, config: Optional[ResponseAnalysisConfig] = None):
         self.repository = repository
         self.config = config or ResponseAnalysisConfig()
-        self.model = None
+        self.model: SentenceTransformer | Literal[False] | None = None
 
-    def _ensure_model(self):
+    def _ensure_model(self) -> SentenceTransformer | Literal[False]:
         if self.model is not None:
             return self.model
         try:
@@ -37,7 +40,7 @@ class SemanticAnalyzer:
 
     def _encode(self, text: str, vocabulary: Optional[list[str]] = None) -> np.ndarray:
         model = self._ensure_model()
-        if model and model is not False:
+        if model is not False:
             if vocabulary is None:
                 return np.asarray(model.encode([text], convert_to_numpy=True)[0], dtype=float)
             encoded = np.asarray(model.encode([text], convert_to_numpy=True)[0], dtype=float)

@@ -4,10 +4,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Sequence
 
-from sqlalchemy import Column, Float, Integer, String
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import Float, Integer, String
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    pass
 
 
 class ResponseCategory(str, Enum):
@@ -31,10 +33,10 @@ class ResponseSource(str, Enum):
 class ResponsePattern(Base):
     __tablename__ = "response_patterns"
 
-    id = Column(Integer, primary_key=True)
-    pattern = Column(String(120), unique=True, nullable=False)
-    category = Column(String(32), nullable=False)
-    confidence = Column(Float, nullable=False, default=1.0)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pattern: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
 
     def __repr__(self) -> str:
         return f"ResponsePattern(pattern={self.pattern!r}, category={self.category!r})"

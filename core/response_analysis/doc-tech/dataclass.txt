@@ -1,0 +1,34 @@
+# dataclass
+
+- це вбудований інструмент пайтон для спрощення синтаксису класів, якщо їх задача - збереження данних. 
+
+Порівняння
+```
+class User:
+    def __init__(self, name: str, user_id: int, role: str = "guest"):
+        self.name = name
+        self.user_id = user_id
+        self.role = role
+
+    def __repr__(self):
+        return f"User(name={self.name!r}, user_id={self.user_id!r}, role={self.role!r})"
+```
+
+```
+from dataclasses import dataclass
+
+@dataclass
+class User:
+    name: str
+    user_id: int
+    role: str = "guest"
+```
+
+* frozen=True 
+- робить класи тільки для читання захищаючи від зміни данних
+
+## field
+
+- Повертає об'єкт, що визначає характеристики поля dataclass. 
+- функція яка надає розширені поведінкові можливості для полів
+

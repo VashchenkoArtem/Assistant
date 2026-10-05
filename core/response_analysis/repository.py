@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from .config import DEFAULT_CONFIG
 from .models import Base, ResponseCategory, ResponsePattern
@@ -30,6 +30,7 @@ class ResponseRepository:
                 ("звичайно", ResponseCategory.CONFIRMATION, 1.0),
                 ("давай", ResponseCategory.CONFIRMATION, 1.0),
                 ("можна", ResponseCategory.CONFIRMATION, 1.0),
+                
                 ("ні", ResponseCategory.REJECTION, 1.0),
                 ("не хочу", ResponseCategory.REJECTION, 1.0),
                 ("не треба", ResponseCategory.REJECTION, 1.0),
@@ -79,13 +80,15 @@ class ResponseRepository:
         if isinstance(category, str):
             category = ResponseCategory(category)
         with self.session_factory() as session:
-            return session.execute(
-                select(ResponsePattern).where(ResponsePattern.category == category.value)
-            ).scalars().all()
+            return list(
+                session.execute(
+                    select(ResponsePattern).where(ResponsePattern.category == category.value)
+                ).scalars().all()
+            )
 
     def get_all(self) -> list[ResponsePattern]:
         with self.session_factory() as session:
-            return session.execute(select(ResponsePattern)).scalars().all()
+            return list(session.execute(select(ResponsePattern)).scalars().all())
 
     def exists(self, pattern: str) -> bool:
         return self.find_by_pattern(pattern) is not None

@@ -52,6 +52,6 @@ class PatternMatcher:
         return ResponseAnalysis(
             category=ResponseCategory(best_match.category),
             confidence=best_score,
-            matched_pattern=best_match.pattern,
+            matched_pattern=best_match.pattern, # pyright: ignore[reportArgumentType]
             source=ResponseSource.PATTERN,
         )
