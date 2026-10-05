@@ -7,6 +7,13 @@ from utils.match_app import get_known_apps, find_best_match
 import platform, os, subprocess
 from utils.voicing_answer import run_voice, voicing_and_printing_answer
 from utils.match_app import register_found_app, is_unknown
+from core.response_analysis import (
+    DialogContext,
+    DialogState,
+    ResponseAnalyzer,
+    ResponseCategory,
+    ResponseRepository,
+)
 
 
 CONFIRM_WORDS = ("так", "да", "правильно", "точно", "вірно")
@@ -17,6 +24,8 @@ class Command(BaseCommand):
 
         self.run = True
         self.pending_app: dict[str, Any] | None = None
+        self.response_repository = ResponseRepository("sqlite:///response_patterns.db")
+        self.response_analyzer = ResponseAnalyzer(self.response_repository)
 
         self.paused = False
         self.stdout.write(self.style.SUCCESS(f"Асистент почав роботу"))
@@ -81,6 +90,15 @@ class Command(BaseCommand):
             self.handle_open_close(text= text, is_open= "відкрий" in lowered)
             return
 
+    def analyze_response(self, text, question=""):
+        context = DialogContext(
+            state=DialogState.WAITING_FOR_RESPONSE,
+            question=question,
+            pending_action="add_or_close_app" if self.pending_app else "",
+            expected_response_categories=(ResponseCategory.CONFIRMATION, ResponseCategory.REJECTION),
+        )
+        return self.response_analyzer.analyze(question, text, context)
+
     def handle_confirmation(self, text):
         cleaned_text = text.strip().lower()
 
@@ -88,6 +106,30 @@ class Command(BaseCommand):
             return
 
         pending_app = self.pending_app
+        question = f"Чи правильно я почув назву? Назва програми: {pending_app['name']}?"
+        analysis = self.analyze_response(cleaned_text, question=question)
+
+        if analysis.category == ResponseCategory.CONFIRMATION:
+            register_found_app(
+                name=pending_app["name"],
+                path=pending_app["path"]
+            )
+
+            if pending_app["is_open"]:
+                self.open_app(pending_app["path"])
+            else:
+                self.close_app(
+                    os.path.basename(pending_app["path"])
+                )
+
+            voicing_and_printing_answer("Добре, запам'ятала")
+            self.pending_app = None
+            return
+
+        if analysis.category == ResponseCategory.REJECTION:
+            voicing_and_printing_answer("Тоді спробуй повторити команду ще раз")
+            self.pending_app = None
+            return
 
         if cleaned_text in CONFIRM_WORDS:
             register_found_app(
@@ -110,6 +152,8 @@ class Command(BaseCommand):
             voicing_and_printing_answer("Тоді спробуй повторити команду ще раз")
             self.pending_app = None
             return
+
+        voicing_and_printing_answer("Не впевнена, повторіть, будь ласка")
 
     def pause_assistant(self):
         if self.paused:
