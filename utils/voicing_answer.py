@@ -106,3 +106,7 @@ def run_voice(text: str, wait: bool = False):
         return
 
     VOICE_QUEUE.put(text)
+
+def voicing_and_printing_answer(text: str):
+    run_voice(text)
+    print(text)

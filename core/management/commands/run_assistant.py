@@ -1,9 +1,11 @@
+from typing import Any, cast
+
 from utils.list_apps import get_list_installed_apps
 from django.core.management.base import BaseCommand
-import speech_recognition 
+import speech_recognition
 from utils.match_app import get_known_apps, find_best_match
 import platform, os, subprocess
-from utils.voicing_answer import run_voice
+from utils.voicing_answer import run_voice, voicing_and_printing_answer
 from utils.match_app import register_found_app, is_unknown
 
 
@@ -14,12 +16,12 @@ class Command(BaseCommand):
     def handle(self, *args, **kwargs):
 
         self.run = True
-        self.pending_app = None
+        self.pending_app: dict[str, Any] | None = None
 
         self.paused = False
         self.stdout.write(self.style.SUCCESS(f"Асистент почав роботу"))
-        recognizer = speech_recognition.Recognizer()
-        microphone = speech_recognition.Microphone()
+        recognizer = cast(Any, speech_recognition.Recognizer())
+        microphone = cast(Any, speech_recognition.Microphone())
 
         with microphone as source:
             self.stdout.write("Почекайте, йде налаштування мікрофона...")
@@ -47,12 +49,11 @@ class Command(BaseCommand):
                     self.stdout.write(self.style.WARNING(f"Помилка: {error}"))
 
     def doing_task(self, text):
-        lowered = text.lower()
+        lowered = text.strip().lower()
 
         if self.pending_app:
             self.handle_confirmation(lowered)
             return
-        
 
         if any(keyword in lowered for keyword in ["пауза"]):
             self.pause_assistant()
@@ -67,11 +68,11 @@ class Command(BaseCommand):
             return
 
         if "привіт" in lowered:
-            run_voice("Привіт, радa тебе бачити!")
+            voicing_and_printing_answer("Привіт, рада тебе бачити!")
             return
 
         if "додатки" in lowered:
-            run_voice("Відкриваю список додатків...")
+            voicing_and_printing_answer("Відкриваю список додатків...")
             apps = get_list_installed_apps()
             self.stdout.write(f"Встановлені додатки: {', '.join(apps.keys())}")
             return
@@ -79,30 +80,36 @@ class Command(BaseCommand):
         if "відкрий" in lowered or "закрий" in lowered:
             self.handle_open_close(text= text, is_open= "відкрий" in lowered)
             return
-        
+
     def handle_confirmation(self, text):
-        if text in CONFIRM_WORDS:
+        cleaned_text = text.strip().lower()
+
+        if self.pending_app is None:
+            return
+
+        pending_app = self.pending_app
+
+        if cleaned_text in CONFIRM_WORDS:
             register_found_app(
-                name=self.pending_app["name"],
-                path=self.pending_app["path"]
+                name=pending_app["name"],
+                path=pending_app["path"]
             )
 
-            if self.pending_app["is_open"]:
-                self.open_app(self.pending_app["path"])
+            if pending_app["is_open"]:
+                self.open_app(pending_app["path"])
             else:
                 self.close_app(
-                    os.path.basename(self.pending_app["path"])
+                    os.path.basename(pending_app["path"])
                 )
 
-            run_voice("Добре, запам'ятала")
+            voicing_and_printing_answer("Добре, запам'ятала")
             self.pending_app = None
             return
 
-        if text in DENY_WORDS:
-            run_voice("Тоді спробуй повторити команду ще раз")
+        if cleaned_text in DENY_WORDS:
+            voicing_and_printing_answer("Тоді спробуй повторити команду ще раз")
             self.pending_app = None
             return
-        
 
     def pause_assistant(self):
         if self.paused:
@@ -130,54 +137,70 @@ class Command(BaseCommand):
 
         index = lowered.find(trigger)
 
+        if index == -1:
+            voicing_and_printing_answer("Повторіть команду для відкриття або закриття програми")
+            return
+
         start = index + len(trigger)
         target_word = text[start:].strip()
 
         if not target_word:
-            run_voice("Повторіть яку програму відкрити")
-            return 
+            voicing_and_printing_answer("Повторіть яку програму відкрити")
+            return
 
+        voicing_and_printing_answer("Починаю шукати програму...")
         apps = get_known_apps()
-        name, path = find_best_match(word= target_word, apps= apps, threshold= 0.45)
-        is_unknown_app = is_unknown(name= name, path= path)
-        
+        match_result = find_best_match(word=target_word, apps=apps, threshold=0.45)
+
+        if match_result is None:
+            voicing_and_printing_answer(f"Я не знайшла програму схожу на {target_word}")
+            return
+
+        name, path = match_result
+
+        if not name or not path:
+            voicing_and_printing_answer(f"Я не знайшла програму схожу на {target_word}")
+            return
+
+        is_unknown_app = is_unknown(name=name, path=path)
+
         if is_unknown_app:
-            run_voice(f"Чи дійсно це программа {name}?")
+            voicing_and_printing_answer(f"Чи правильно я почув назву? Назва програми: {name}?")
             self.pending_app = {
                 "name": name,
                 "path": path,
                 "is_open": is_open,
             }
             return
-        
-        if not name:
-            run_voice(f"Я не знайшла програму схожу на {target_word}")
-            return 
+
+        voicing_and_printing_answer(f"Знайшла програму {name}")
+
         if is_open:
-            run_voice(f"Відкриваю {name}")
-            register_found_app(name= name, path= path)
-            self.open_app(path= path)
+            voicing_and_printing_answer(f"Відкриваю {name}")
+            register_found_app(name=name, path=path)
+            self.open_app(path=path)
         else:
-            run_voice(f"Закриваю {name}")
-            register_found_app(name= name, path= path)
-            self.close_app(app_name= os.path.basename(path))
-    
+            voicing_and_printing_answer(f"Закриваю {name}")
+            register_found_app(name=name, path=path)
+            self.close_app(app_name=os.path.basename(path))
+
     def open_app(self, path):
         try:
             system = platform.system()
             if system == "Windows":
                 os.startfile(path)
-            if system == "Darwin":
-                subprocess.Popen(args= ["open", path])
+            elif system == "Darwin":
+                subprocess.Popen(args=["open", path])
             else:
-                subprocess.Popen(args= [path])
+                subprocess.Popen(args=[path])
         except Exception as error:
-            self.stdout.write(self.style.WARNING(f"Помилка закриття: {error}"))
+            self.stdout.write(self.style.WARNING(f"Помилка відкриття: {error}"))
 
     def close_app(self, app_name: str):
         try:
             system = platform.system()
-            if not app_name.endswith(".exe"):
+            app_name = os.path.basename(app_name)
+            if system == "Windows" and not app_name.lower().endswith(".exe"):
                 app_name += ".exe"
             if system == "Windows":
                 subprocess.run(
@@ -186,6 +209,6 @@ class Command(BaseCommand):
                     stderr=subprocess.DEVNULL,
                 )
             else:
-                subprocess.run(args=["pkill", app_name])
+                subprocess.run(args=["pkill", "-f", app_name])
         except Exception as error:
             self.stdout.write(self.style.WARNING(f"Помилка закриття: {error}"))
