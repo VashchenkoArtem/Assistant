@@ -1,5 +1,6 @@
-from unittest.mock import Mock, patch
 import os
+from collections.abc import Iterable
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "Assistant.settings")
 
@@ -11,18 +12,22 @@ from core.management.commands import run_assistant
 from core.management.commands.run_assistant import Command
 from core.response_analysis import (
     ResponseAnalysis,
+    DialogContext,
     ResponseCategory,
+    ResponseAnalyzer,
     ResponseLearner,
     ResponseRepository,
     ResponseSource,
 )
 
 
-class QueuedAnalyzer:
-    def __init__(self, results):
+class QueuedAnalyzer(ResponseAnalyzer):
+    def __init__(self, repository: ResponseRepository, results: Iterable[ResponseAnalysis]):
+        super().__init__(repository)
         self.results = iter(results)
 
-    def analyze(self, question, answer, dialog_context):
+    def analyze(self, question: str, answer: str, dialog_context: DialogContext | None = None) -> ResponseAnalysis:
+        _ = question, answer, dialog_context
         return next(self.results)
 
 
@@ -38,14 +43,15 @@ def make_command(tmp_path, results):
         f"sqlite:///{tmp_path / 'responses.db'}"
     )
     command.response_learner = ResponseLearner(command.response_repository)
-    command.response_analyzer = QueuedAnalyzer(results)
-    command.open_app = Mock()
+    command.response_analyzer = QueuedAnalyzer(command.response_repository, results)
+    open_app = Mock()
+    command.open_app = open_app
     command.close_app = Mock()
-    return command
+    return command, open_app
 
 
 def test_unknown_app_confirmation_reprompts_without_executing(tmp_path):
-    command = make_command(
+    command, open_app = make_command(
         tmp_path,
         [ResponseAnalysis(ResponseCategory.UNKNOWN, 0.4)],
     )
@@ -57,13 +63,13 @@ def test_unknown_app_confirmation_reprompts_without_executing(tmp_path):
         command.handle_confirmation("можливо")
 
     assert command.pending_app is not None
-    command.open_app.assert_not_called()
+    open_app.assert_not_called()
     register.assert_not_called()
     assert "так або ні" in speak.call_args.args[0]
 
 
 def test_semantic_candidate_requires_learning_confirmation_before_action(tmp_path):
-    command = make_command(
+    command, open_app = make_command(
         tmp_path,
         [
             ResponseAnalysis(
@@ -90,7 +96,7 @@ def test_semantic_candidate_requires_learning_confirmation_before_action(tmp_pat
         assert command.pending_learning_candidate is not None
         assert command.pending_learning_candidate.text == "без питань, вперед"
         assert command.pending_app is not None
-        command.open_app.assert_not_called()
+        open_app.assert_not_called()
         register.assert_not_called()
         assert "Запам'ятати фразу" in speak.call_args.args[0]
 
@@ -99,12 +105,12 @@ def test_semantic_candidate_requires_learning_confirmation_before_action(tmp_pat
     assert command.response_repository.exists("без питань, вперед")
     assert command.pending_learning_candidate is None
     assert command.pending_app is None
-    command.open_app.assert_called_once_with("C:\\Apps\\example.exe")
+    open_app.assert_called_once_with("C:\\Apps\\example.exe")
     register.assert_called_once()
 
 
 def test_unknown_learning_answer_reprompts_and_keeps_candidate_pending(tmp_path):
-    command = make_command(
+    command, open_app = make_command(
         tmp_path,
         [
             ResponseAnalysis(
@@ -128,14 +134,14 @@ def test_unknown_learning_answer_reprompts_and_keeps_candidate_pending(tmp_path)
 
     assert command.pending_learning_candidate is pending_candidate
     assert command.pending_app is not None
-    command.open_app.assert_not_called()
+    open_app.assert_not_called()
     register.assert_not_called()
     assert "Не впевнена" in speak.call_args.args[0]
     assert "Запам'ятати фразу" in speak.call_args.args[0]
 
 
 def test_rejecting_learning_does_not_cancel_pending_app_action(tmp_path):
-    command = make_command(
+    command, open_app = make_command(
         tmp_path,
         [
             ResponseAnalysis(
@@ -163,5 +169,5 @@ def test_rejecting_learning_does_not_cancel_pending_app_action(tmp_path):
     assert not command.response_repository.exists("без питань, вперед")
     assert command.pending_learning_candidate is None
     assert command.pending_app is None
-    command.open_app.assert_called_once_with("C:\\Apps\\example.exe")
+    open_app.assert_called_once_with("C:\\Apps\\example.exe")
     register.assert_called_once()
