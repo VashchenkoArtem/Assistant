@@ -7,13 +7,17 @@ TABLE = {
     "ь": "", "ю": "iu", "я": "ia", "'": "", "’": "",
 }
 
-def transliterate(text: str):
-    result_text = ""
 
-    for char in text.lower():
-        if char in TABLE:
-            result_text += TABLE[char]
-        else:
-            result_text += char
-    return result_text
-        
+def transliterate(text: str, g_variant: bool = False) -> str:
+    table = TABLE if not g_variant else {**TABLE, "г": "g"}
+    return "".join(table.get(ch, ch) for ch in text.lower())
+
+
+def transliterate_variants(text: str) -> set[str]:
+    """Повертає всі варіанти транслітерації + оригінальний текст (lower)."""
+    return {
+        text.lower(),
+        transliterate(text, g_variant=False),
+        transliterate(text, g_variant=True),
+    }
+ 

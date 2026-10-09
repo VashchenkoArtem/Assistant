@@ -1,8 +1,11 @@
 from core.models import AppCommand
+from utils.text_similarity import partial_similarity
+from utils.transliterate import transliterate_variants
+
 
 CATEGORY_THRESHOLD = 0.7
 
-CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
+_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
     AppCommand.Category.BROWSER: (
         "chrome", "firefox", "edge", "opera", "brave", "safari",
         "yandex", "vivaldi", "browser",
@@ -30,10 +33,20 @@ CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-def guess_category(name: str):
+
+def guess_category(name: str) -> str:
+    candidates = {name.lower().replace(" ", "").replace("-", "")} | {
+        v.replace(" ", "").replace("-", "") for v in transliterate_variants(name)
+    }
 
     best_category = AppCommand.Category.OTHER
-    best_ratio = 0.0
+    best_score = 0.0
 
-    
-    
+    for category, keywords in _CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
+            for candidate in candidates:
+                score = partial_similarity(candidate, keyword)
+                if score > best_score:
+                    best_score, best_category = score, category
+
+    return best_category if best_score >= CATEGORY_THRESHOLD else AppCommand.Category.OTHER

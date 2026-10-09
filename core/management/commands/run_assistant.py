@@ -3,9 +3,9 @@ from django.core.management.base import BaseCommand
 import speech_recognition 
 from utils.match_app import get_known_apps, find_best_match
 import platform, os, subprocess
-from utils.voicing_answer import run_voice, voicing_and_printing_answer
+from utils.voicing_answer import voicing_and_printing_answer, voicing_text
 from utils.match_app import register_found_app, is_unknown
-
+from core.models import AppCommand
 
 CONFIRM_WORDS = ("так", "да", "правильно", "точно", "вірно")
 DENY_WORDS = ("ні", "не", "неправильно")
@@ -80,7 +80,13 @@ class Command(BaseCommand):
             voicing_and_printing_answer("Тоді спробуй повторити команду ще раз")
             self.pending_app = None
             return
-        
+    def learn_new_app(self, spoken_name):
+        confirmed = self.confirm_name(spoken_name)
+        if confirmed:
+            AppCommand.objects.get_or_create(name=spoken_name.strip().lower())
+            voicing_and_printing_answer(f"Добре, я запам'ятала назву {spoken_name}...")
+        else:
+            voicing_text("Тоді спробуй повторити команду ще раз.")   
     def handle_open_close(self, text, is_open):
         lowered = text.lower()
         trigger = "відкрий" if is_open else "закрий"
