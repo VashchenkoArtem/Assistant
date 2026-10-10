@@ -13,7 +13,9 @@ if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
 
+# клас для аналізу сематичного змісту речення 
 class SemanticAnalyzer:
+    # конструктор 
     def __init__(self, repository: ResponseRepository, config: Optional[ResponseAnalysisConfig] = None):
         self.repository = repository
         self.config = config or ResponseAnalysisConfig()

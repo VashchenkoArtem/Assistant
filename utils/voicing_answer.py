@@ -20,6 +20,25 @@ voice_profile = {
 
 VOICE_QUEUE = queue.Queue()
 MIXER_LOCK = threading.Lock()
+AUDIO_LOCK = threading.Lock()
+VOICE_ACTIVE = threading.Event()
+VOICE_STATE_LOCK = threading.Lock()
+_active_voice_requests = 0
+
+
+def _mark_voice_request_started():
+    global _active_voice_requests
+    with VOICE_STATE_LOCK:
+        _active_voice_requests += 1
+        VOICE_ACTIVE.set()
+
+
+def _mark_voice_request_finished():
+    global _active_voice_requests
+    with VOICE_STATE_LOCK:
+        _active_voice_requests -= 1
+        if _active_voice_requests == 0:
+            VOICE_ACTIVE.clear()
 
 
 def _voice_worker():
@@ -29,9 +48,12 @@ def _voice_worker():
             VOICE_QUEUE.task_done()
             break
         try:
-            voicing_text(text)
+            with AUDIO_LOCK:
+                voicing_text(text)
+                time.sleep(0.3)
         finally:
             VOICE_QUEUE.task_done()
+            _mark_voice_request_finished()
 
 
 async def create_voice(text: str, file_name: str):
@@ -102,10 +124,21 @@ def run_voice(text: str, wait: bool = False):
         return
 
     if wait:
-        voicing_text(text)
+        _mark_voice_request_started()
+        try:
+            with AUDIO_LOCK:
+                voicing_text(text)
+                time.sleep(0.3)
+        finally:
+            _mark_voice_request_finished()
         return
 
-    VOICE_QUEUE.put(text)
+    _mark_voice_request_started()
+    try:
+        VOICE_QUEUE.put(text)
+    except Exception:
+        _mark_voice_request_finished()
+        raise
 
 def voicing_and_printing_answer(text: str):
     run_voice(text)

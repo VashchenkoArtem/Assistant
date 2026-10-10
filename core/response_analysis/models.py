@@ -27,6 +27,7 @@ class DialogState(str, Enum):
 class ResponseSource(str, Enum):
     PATTERN = "PATTERN"
     SEMANTIC = "SEMANTIC"
+    RULE = "RULE"
     UNKNOWN = "UNKNOWN"
 
 

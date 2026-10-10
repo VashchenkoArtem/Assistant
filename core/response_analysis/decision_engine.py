@@ -10,6 +10,26 @@ from .text_normalizer import TextNormalizer
 
 
 class DecisionEngine:
+    UNCERTAINTY_PHRASES = (
+        "не впевнений",
+        "не впевнена",
+        "не впевнено",
+        "не знаю",
+        "важко сказати",
+        "можливо",
+        "мабуть",
+    )
+    PERMISSION_CONFIRMATION_PHRASES = (
+        "можеш відкривати",
+        "можеш відкрити",
+        "можете відкривати",
+        "можете відкрити",
+        "можеш запускати",
+        "можеш запустити",
+        "можете запускати",
+        "можете запустити",
+    )
+
     def __init__(
         self,
         repository,
@@ -49,7 +69,7 @@ class DecisionEngine:
             "звичайно",
             "давай",
             "можна",
-        )
+        ) + DecisionEngine.PERMISSION_CONFIRMATION_PHRASES
         return any(phrase in lowered for phrase in positive_phrases)
 
     def decide(self, text: str, dialog_context: Optional[DialogContext] = None):
@@ -60,8 +80,33 @@ class DecisionEngine:
             else (ResponseCategory.CONFIRMATION, ResponseCategory.REJECTION)
         )
 
+        if any(phrase in normalized for phrase in self.UNCERTAINTY_PHRASES):
+            return ResponseAnalysis(
+                ResponseCategory.UNKNOWN,
+                0.0,
+                None,
+                ResponseSource.UNKNOWN,
+            )
+
         if self._contains_negation(normalized) and self._contains_confirmation(normalized):
             return ResponseAnalysis(ResponseCategory.REJECTION, 0.82, None, ResponseSource.UNKNOWN)
+
+        if ResponseCategory.CONFIRMATION in expected:
+            permission_phrase = next(
+                (
+                    phrase
+                    for phrase in self.PERMISSION_CONFIRMATION_PHRASES
+                    if phrase in normalized
+                ),
+                None,
+            )
+            if permission_phrase is not None:
+                return ResponseAnalysis(
+                    ResponseCategory.CONFIRMATION,
+                    0.9,
+                    permission_phrase,
+                    ResponseSource.RULE,
+                )
 
         exact = self.pattern_matcher.match(normalized, tuple(expected))
         if exact is not None:

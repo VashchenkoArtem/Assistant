@@ -55,6 +55,25 @@ def test_decision_engine_resolves_negation_conflict(tmp_path):
     assert result.category == ResponseCategory.REJECTION
 
 
+def test_decision_engine_recognizes_permission_as_builtin_confirmation(tmp_path):
+    repository = make_repository(tmp_path)
+    engine = DecisionEngine(repository)
+
+    result = engine.decide("можеш відкривати")
+
+    assert result.category == ResponseCategory.CONFIRMATION
+    assert result.source.value == "RULE"
+
+
+def test_decision_engine_keeps_uncertain_answer_unknown(tmp_path):
+    repository = make_repository(tmp_path)
+    engine = DecisionEngine(repository)
+
+    result = engine.decide("не впевнений, але думаю, що правильно")
+
+    assert result.category == ResponseCategory.UNKNOWN
+
+
 def test_response_analyzer_returns_confirmation_for_positive_answer(tmp_path):
     repository = make_repository(tmp_path)
     analyzer = ResponseAnalyzer(repository)

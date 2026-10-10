@@ -1,11 +1,17 @@
 from typing import Any, cast
+import re
 
 from utils.list_apps import get_list_installed_apps
 from django.core.management.base import BaseCommand
 import speech_recognition
 from utils.match_app import get_known_apps, find_best_match
 import platform, os, subprocess
-from utils.voicing_answer import run_voice, voicing_and_printing_answer
+from utils.voicing_answer import (
+    AUDIO_LOCK,
+    VOICE_ACTIVE,
+    run_voice,
+    voicing_and_printing_answer,
+)
 from utils.match_app import register_found_app, is_unknown
 from core.response_analysis import (
     DialogContext,
@@ -21,6 +27,16 @@ from core.response_analysis import (
 
 CONFIRM_WORDS = ("так", "да", "правильно", "точно", "вірно")
 DENY_WORDS = ("ні", "не", "неправильно")
+CANCEL_ACTION_WORDS = ("скасуй", "скасувати", "скасовую", "відміна", "відміни", "відмінити")
+APP_COMMAND_PATTERN = re.compile(
+    r"\b(?P<verb>відкрий|відкрити|відкривай|відкривати|"
+    r"закрий|закрити|закривай|закривати)\b",
+    re.IGNORECASE,
+)
+GENERIC_APP_PREFIX = re.compile(
+    r"^(?:програму|програма|програми|додаток|додатки|застосунок|застосунки)\b\s*",
+    re.IGNORECASE,
+)
 
 class Command(BaseCommand):
     def handle(self, *args, **kwargs):
@@ -44,7 +60,10 @@ class Command(BaseCommand):
 
             while self.run:
                 try:
-                    audio = recognizer.listen(source= source, phrase_time_limit= 5)
+                    audio = self.listen_for_audio(recognizer, source)
+                    if audio is None:
+                        continue
+
                     command_text = recognizer.recognize_google(audio, language= "uk-UA")
                     self.stdout.write(f"Ви сказали: {command_text}")
 
@@ -59,17 +78,45 @@ class Command(BaseCommand):
 
                 except speech_recognition.UnknownValueError:
                     continue
+                except speech_recognition.WaitTimeoutError:
+                    continue
                 except Exception as error:
                     self.stdout.write(self.style.WARNING(f"Помилка: {error}"))
 
+    @staticmethod
+    def listen_for_audio(recognizer: Any, source: Any):
+        with AUDIO_LOCK:
+            if VOICE_ACTIVE.is_set():
+                return None
+
+            try:
+                audio = recognizer.listen(
+                    source=source,
+                    timeout=1,
+                    phrase_time_limit=5,
+                )
+            except speech_recognition.WaitTimeoutError:
+                return None
+
+            if VOICE_ACTIVE.is_set():
+                return None
+            return audio
+
     def doing_task(self, text):
         lowered = text.strip().lower()
+
+        if self.pending_app and self.is_cancel_action(lowered):
+            self.cancel_pending_action()
+            return
 
         if self.pending_learning_candidate is not None:
             self.handle_learning_confirmation(lowered)
             return
 
         if self.pending_app:
+            if self.pending_app.get("awaiting_name"):
+                self.handle_app_name_correction(text)
+                return
             self.handle_confirmation(lowered)
             return
 
@@ -95,9 +142,31 @@ class Command(BaseCommand):
             self.stdout.write(f"Встановлені додатки: {', '.join(apps.keys())}")
             return
 
-        if "відкрий" in lowered or "закрий" in lowered:
-            self.handle_open_close(text= text, is_open= "відкрий" in lowered)
+        if APP_COMMAND_PATTERN.search(lowered):
+            match = APP_COMMAND_PATTERN.search(text)
+            if match is not None:
+                is_open = not match.group("verb").lower().startswith("закри")
+                self.handle_open_close(text=text, is_open=is_open)
             return
+
+    @staticmethod
+    def is_cancel_action(text):
+        normalized = re.sub(r"[^\w\s]", "", text.lower()).strip()
+        first_word = normalized.split(maxsplit=1)[0] if normalized else ""
+        return first_word in CANCEL_ACTION_WORDS
+
+    def cancel_pending_action(self):
+        pending_app = self.pending_app
+        self.pending_app = None
+        self.pending_learning_candidate = None
+
+        if pending_app is None:
+            return
+
+        action = "відкриття" if pending_app["is_open"] else "закриття"
+        voicing_and_printing_answer(
+            f"Добре, скасувала {action} програми {pending_app.get('name', '')}."
+        )
 
     def analyze_response(self, text, question=""):
         context = DialogContext(
@@ -129,8 +198,10 @@ class Command(BaseCommand):
             return
 
         if analysis.category == ResponseCategory.REJECTION or cleaned_text in DENY_WORDS:
-            voicing_and_printing_answer("Тоді спробуй повторити команду ще раз")
-            self.pending_app = None
+            pending_app["awaiting_name"] = True
+            voicing_and_printing_answer(
+                "Добре, це не та програма. Назвіть її точну назву."
+            )
             return
 
         if analysis.category != ResponseCategory.CONFIRMATION and cleaned_text not in CONFIRM_WORDS:
@@ -158,6 +229,21 @@ class Command(BaseCommand):
                 return
 
         self._complete_pending_app()
+
+    def handle_app_name_correction(self, text):
+        pending_app = self.pending_app
+        if pending_app is None:
+            return
+
+        corrected_name = text.strip()
+        if not corrected_name:
+            voicing_and_printing_answer("Назвіть точну назву програми.")
+            return
+
+        is_open = pending_app["is_open"]
+        self.pending_app = None
+        command = "відкрий" if is_open else "закрий"
+        self.handle_open_close(f"{command} {corrected_name}", is_open=is_open)
 
     def handle_learning_confirmation(self, text):
         candidate = self.pending_learning_candidate
@@ -199,7 +285,10 @@ class Command(BaseCommand):
         if pending_app["is_open"]:
             self.open_app(pending_app["path"])
         else:
-            self.close_app(os.path.basename(pending_app["path"]))
+            app_path = pending_app["path"]
+            self.close_app(
+                app_path if app_path.startswith("appx://") else os.path.basename(app_path)
+            )
 
         self.pending_app = None
 
@@ -224,20 +313,21 @@ class Command(BaseCommand):
         self.stdout.write(self.style.WARNING("Асистент зупинено"))
 
     def handle_open_close(self, text, is_open):
-        lowered = text.lower()
-        trigger = "відкрий" if is_open else "закрий"
-
-        index = lowered.find(trigger)
-
-        if index == -1:
+        match = APP_COMMAND_PATTERN.search(text)
+        if match is None:
             voicing_and_printing_answer("Повторіть команду для відкриття або закриття програми")
             return
 
-        start = index + len(trigger)
-        target_word = text[start:].strip()
+        target_word = text[match.end():].strip(" \t.,!?")
+        target_word = GENERIC_APP_PREFIX.sub("", target_word).strip(" \t.,!?")
 
         if not target_word:
-            voicing_and_printing_answer("Повторіть яку програму відкрити")
+            action = "відкрити" if is_open else "закрити"
+            self.pending_app = {
+                "is_open": is_open,
+                "awaiting_name": True,
+            }
+            voicing_and_printing_answer(f"Яку програму {action}? Назвіть її.")
             return
 
         voicing_and_printing_answer("Починаю шукати програму...")
@@ -274,13 +364,19 @@ class Command(BaseCommand):
         else:
             voicing_and_printing_answer(f"Закриваю {name}")
             register_found_app(name=name, path=path)
-            self.close_app(app_name=os.path.basename(path))
+            self.close_app(
+                app_name=path if path.startswith("appx://") else os.path.basename(path)
+            )
 
     def open_app(self, path):
         try:
             system = platform.system()
             if system == "Windows":
-                os.startfile(path)
+                if path.startswith("appx://"):
+                    app_id, _, _ = path.removeprefix("appx://").partition("|")
+                    os.startfile(f"shell:AppsFolder\\{app_id}")
+                else:
+                    os.startfile(path)
             elif system == "Darwin":
                 subprocess.Popen(args=["open", path])
             else:
@@ -291,7 +387,47 @@ class Command(BaseCommand):
     def close_app(self, app_name: str):
         try:
             system = platform.system()
-            app_name = os.path.basename(app_name)
+            if system == "Windows" and app_name.startswith("appx://"):
+                app_id = app_name.removeprefix("appx://")
+                package_family = app_id.partition("!")[0]
+                if not package_family:
+                    raise ValueError("Не вдалося визначити пакет Microsoft Store програми")
+
+                result = subprocess.run(
+                    args=[
+                        "powershell",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        (
+                            "$package = Get-AppxPackage | "
+                            "Where-Object PackageFamilyName -eq "
+                            "$env:ASSISTANT_PACKAGE_FAMILY | Select-Object -First 1; "
+                            "if (-not $package) { exit 2 }; "
+                            "$prefix = $package.InstallLocation.TrimEnd('\\') + '\\'; "
+                            "$processIds = Get-CimInstance Win32_Process | "
+                            "Where-Object { $_.ExecutablePath -and "
+                            "$_.ExecutablePath.StartsWith($prefix, "
+                            "[StringComparison]::OrdinalIgnoreCase) } | "
+                            "Select-Object -ExpandProperty ProcessId; "
+                            "foreach ($processId in $processIds) { "
+                            "Stop-Process -Id $processId -Force -ErrorAction Stop }"
+                        ),
+                    ],
+                    env={**os.environ, "ASSISTANT_PACKAGE_FAMILY": package_family},
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    message = result.stderr.strip() or "Пакет Microsoft Store не знайдено"
+                    self.stdout.write(
+                        self.style.WARNING(f"Не вдалося закрити Store-програму: {message}")
+                    )
+                return
+            else:
+                app_name = os.path.basename(app_name)
             if system == "Windows" and not app_name.lower().endswith(".exe"):
                 app_name += ".exe"
             if system == "Windows":
