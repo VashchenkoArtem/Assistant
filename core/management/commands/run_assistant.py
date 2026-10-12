@@ -3,7 +3,7 @@ from django.core.management.base import BaseCommand
 import speech_recognition 
 from utils.match_app import get_known_apps, find_best_match
 import platform, os, subprocess
-from utils.voicing_answer import voicing_and_printing_answer, voicing_text
+from utils.voicing_answer import run_voice, voicing_and_printing_answer, voicing_text
 from utils.match_app import register_found_app, is_unknown
 from core.models import AppCommand
 
@@ -15,6 +15,8 @@ class Command(BaseCommand):
 
         self.run = True
         self.pending_app = None
+        self.paused = False
+        self.stdout.write(self.style.SUCCESS(f"Асистент почав роботу"))
 
         self.stdout.write(self.style.SUCCESS(f"Асистент почав роботу"))
         recognizer = speech_recognition.Recognizer()
@@ -30,8 +32,16 @@ class Command(BaseCommand):
                     audio = recognizer.listen(source= source, phrase_time_limit= 5)
                     command_text = recognizer.recognize_google(audio, language= "uk-UA")
                     self.stdout.write(f"Ви сказали: {command_text}")
+
+                    if self.paused:
+                        if any(keyword in command_text.lower() for keyword in ["продовж", "продовжуй", "продовжи", "віднови"]):
+                            self.resume_assistant()
+                        elif any(keyword in command_text.lower() for keyword in ["зупини", "стоп", "вимкни", "вимкнись"]):
+                            self.stop_assistant()
+                        continue
+
                     self.doing_task(text= command_text)
-                    
+
                 except speech_recognition.UnknownValueError:
                     continue
                 except Exception as error:
@@ -44,6 +54,18 @@ class Command(BaseCommand):
             self.handle_confirmation(lowered)
             return
         
+        if any(keyword in lowered for keyword in ["пауза"]):
+            self.pause_assistant()
+            return
+
+        if any(keyword in lowered for keyword in ["продовж", "віднови"]):
+            self.resume_assistant()
+            return
+
+        if any(keyword in lowered for keyword in ["зупини", "стоп", "вимкни"]):
+            self.stop_assistant()
+            return
+
         if "привіт" in lowered:
             voicing_and_printing_answer("Привіт, радa тебе бачити!")
             return
@@ -53,7 +75,7 @@ class Command(BaseCommand):
             apps = get_list_installed_apps()
             self.stdout.write(f"Встановлені додатки: {', '.join(apps.keys())}")
             return
-        
+
         if "відкрий" in lowered or "закрий" in lowered:
             self.handle_open_close(text= text, is_open= "відкрий" in lowered)
             return
@@ -87,6 +109,26 @@ class Command(BaseCommand):
             voicing_and_printing_answer(f"Добре, я запам'ятала назву {spoken_name}...")
         else:
             voicing_text("Тоді спробуй повторити команду ще раз.")   
+    def pause_assistant(self):
+        if self.paused:
+            return
+        self.paused = True
+        run_voice("Асистент на паузі", wait=True)
+        self.stdout.write(self.style.WARNING("Асистент на паузі"))
+
+    def resume_assistant(self):
+        if not self.paused:
+            return
+        self.paused = False
+        run_voice("Асистент продовжує роботу", wait=True)
+        self.stdout.write(self.style.SUCCESS("Асистент продовжив роботу"))
+
+    def stop_assistant(self):
+        run_voice("Асистент вимкнений", wait=True)
+        self.run = False
+        self.paused = False
+        self.stdout.write(self.style.WARNING("Асистент зупинено"))
+
     def handle_open_close(self, text, is_open):
         lowered = text.lower()
         trigger = "відкрий" if is_open else "закрий"
