@@ -109,18 +109,7 @@ class Command(BaseCommand):
             self.cancel_pending_action()
             return
 
-        if self.pending_learning_candidate is not None:
-            self.handle_learning_confirmation(lowered)
-            return
-
-        if self.pending_app:
-            if self.pending_app.get("awaiting_name"):
-                self.handle_app_name_correction(text)
-                return
-            self.handle_confirmation(lowered)
-            return
-
-        if any(keyword in lowered for keyword in ["пауза"]):
+        if "пауза" in lowered:
             self.pause_assistant()
             return
 
@@ -132,12 +121,22 @@ class Command(BaseCommand):
             self.stop_assistant()
             return
 
+        if self.pending_learning_candidate is not None:
+            self.handle_learning_confirmation(lowered)
+            return
+
+        if self.pending_app:
+            if self.pending_app.get("awaiting_name"):
+                self.handle_app_name_correction(text)
+                return
+            self.handle_confirmation(lowered)
+            return
+
         if "привіт" in lowered:
             voicing_and_printing_answer("Привіт, рада тебе бачити!")
             return
 
         if "додатки" in lowered:
-            voicing_and_printing_answer("Відкриваю список додатків...")
             voicing_and_printing_answer("Відкриваю список додатків...")
             apps = get_list_installed_apps()
             self.stdout.write(f"Встановлені додатки: {', '.join(apps.keys())}")
@@ -308,6 +307,8 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("Асистент продовжив роботу"))
 
     def stop_assistant(self):
+        self.pending_app = None
+        self.pending_learning_candidate = None
         run_voice("Асистент вимкнений", wait=True)
         self.run = False
         self.paused = False
@@ -348,7 +349,6 @@ class Command(BaseCommand):
         is_unknown_app = is_unknown(name=name, path=path)
 
         if is_unknown_app:
-            voicing_and_printing_answer(f"Чи правильно я почув назву? Назва програми: {name}?")
             voicing_and_printing_answer(f"Чи правильно я почув назву? Назва програми: {name}?")
             self.pending_app = {
                 "name": name,

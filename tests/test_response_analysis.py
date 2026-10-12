@@ -35,6 +35,22 @@ def test_pattern_matcher_identifies_known_patterns(tmp_path):
     assert rejection.category == ResponseCategory.REJECTION
 
 
+def test_repository_seeds_missing_defaults_without_removing_user_patterns(tmp_path):
+    repository = make_repository(tmp_path)
+    user_pattern = "мій власний шаблон"
+    repository.create(user_pattern, ResponseCategory.CONFIRMATION)
+
+    for pattern in repository.get_all():
+        if pattern.pattern != user_pattern:
+            repository.delete(pattern.id)
+
+    repository.seed_default_patterns()
+
+    patterns = {pattern.pattern for pattern in repository.get_all()}
+    assert user_pattern in patterns
+    assert {"так", "ні", "ага", "не хочу"} <= patterns
+
+
 def test_semantic_analyzer_handles_near_variants(tmp_path):
     repository = make_repository(tmp_path)
     analyzer = SemanticAnalyzer(repository)

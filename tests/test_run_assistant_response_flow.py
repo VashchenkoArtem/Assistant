@@ -76,6 +76,72 @@ def test_synchronous_voice_playback_marks_audio_as_busy():
     assert not voicing_answer.VOICE_ACTIVE.is_set()
 
 
+def test_app_list_prompt_is_spoken_once(tmp_path):
+    command, _ = make_command(tmp_path, [])
+    command.pending_app = None
+
+    with (
+        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+        patch.object(run_assistant, "get_list_installed_apps", return_value={"Steam": "steam.exe"}),
+    ):
+        command.doing_task("додатки")
+
+    prompts = [
+        call.args[0]
+        for call in speak.call_args_list
+        if call.args and call.args[0] == "Відкриваю список додатків..."
+    ]
+    assert prompts == ["Відкриваю список додатків..."]
+
+
+def test_app_name_confirmation_prompt_is_spoken_once(tmp_path):
+    command, _ = make_command(tmp_path, [])
+    command.pending_app = None
+
+    with (
+        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+        patch.object(run_assistant, "get_known_apps", return_value={"Steam": "C:\\Apps\\steam.exe"}),
+        patch.object(run_assistant, "is_unknown", return_value=True),
+    ):
+        command.handle_open_close("відкрий Steam", is_open=True)
+
+    confirmation_prompts = [
+        call.args[0]
+        for call in speak.call_args_list
+        if call.args and call.args[0].startswith("Чи правильно я почув назву?")
+    ]
+    assert confirmation_prompts == [
+        "Чи правильно я почув назву? Назва програми: Steam?"
+    ]
+
+
+def test_pause_command_is_available_while_waiting_for_app_confirmation(tmp_path):
+    command, _ = make_command(tmp_path, [])
+    command.paused = False
+
+    with patch.object(run_assistant, "run_voice"):
+        command.doing_task("пауза")
+
+    assert command.paused is True
+    assert command.pending_app is not None
+
+
+def test_stop_command_clears_pending_dialog_state(tmp_path):
+    command, _ = make_command(tmp_path, [])
+    command.pending_learning_candidate = command.response_learner.create_candidate(
+        "ще одна згода",
+        ResponseCategory.CONFIRMATION,
+        0.9,
+    )
+
+    with patch.object(run_assistant, "run_voice"):
+        command.doing_task("зупини асистента")
+
+    assert command.run is False
+    assert command.pending_app is None
+    assert command.pending_learning_candidate is None
+
+
 def test_unknown_app_confirmation_reprompts_without_executing(tmp_path):
     command, open_app = make_command(
         tmp_path,

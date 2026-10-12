@@ -9,7 +9,6 @@ import edge_tts
 import pygame
 
 VOICE = "uk-UA-PolinaNeural"
-VOICE = "uk-UA-PolinaNeural"
 
 voice_profile = {
     "voice": VOICE,

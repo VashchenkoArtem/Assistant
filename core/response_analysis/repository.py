@@ -18,10 +18,6 @@ class ResponseRepository:
 
     def seed_default_patterns(self) -> None:
         with self.session_factory() as session:
-            existing = session.execute(select(ResponsePattern)).scalars().all()
-            if existing:
-                return
-
             defaults = [
                 ("так", ResponseCategory.CONFIRMATION, 1.0),
                 ("ага", ResponseCategory.CONFIRMATION, 1.0),
@@ -39,8 +35,18 @@ class ResponseRepository:
                 ("я передумав", ResponseCategory.REJECTION, 1.0),
             ]
 
+            existing_patterns = set(
+                session.execute(select(ResponsePattern.pattern)).scalars()
+            )
             for pattern_text, category, confidence in defaults:
-                session.add(ResponsePattern(pattern=pattern_text, category=category.value, confidence=confidence))
+                if pattern_text not in existing_patterns:
+                    session.add(
+                        ResponsePattern(
+                            pattern=pattern_text,
+                            category=category.value,
+                            confidence=confidence,
+                        )
+                    )
 
             session.commit()
 
