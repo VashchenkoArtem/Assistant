@@ -138,6 +138,7 @@ class Command(BaseCommand):
 
         if "додатки" in lowered:
             voicing_and_printing_answer("Відкриваю список додатків...")
+            voicing_and_printing_answer("Відкриваю список додатків...")
             apps = get_list_installed_apps()
             self.stdout.write(f"Встановлені додатки: {', '.join(apps.keys())}")
             return
@@ -347,6 +348,7 @@ class Command(BaseCommand):
         is_unknown_app = is_unknown(name=name, path=path)
 
         if is_unknown_app:
+            voicing_and_printing_answer(f"Чи правильно я почув назву? Назва програми: {name}?")
             voicing_and_printing_answer(f"Чи правильно я почув назву? Назва програми: {name}?")
             self.pending_app = {
                 "name": name,

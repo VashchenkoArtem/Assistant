@@ -2,10 +2,10 @@ import difflib
 import re
 
 from utils.transliterate import transliterate
+from utils.categorize import guess_category
 
 from .list_apps import get_list_installed_apps
 from core.models import AppCommand
-
 
 THRESHOLD = 0.6
 MIN_MATCH_MARGIN = 0.05
@@ -116,8 +116,29 @@ def is_unknown(name, path):
 
 
 
-def register_found_app(name, path):
-    if is_unknown(name, path):
-        AppCommand.objects.create(name= name, path= path, added_automatically= True)
-    return
-    
+def register_found_app(name: str, path: str) -> None:
+
+    existing = AppCommand.objects.filter(path=path).first() or AppCommand.objects.filter(name=name).first()
+
+    if existing:
+        upgrade_category_if_unknown(existing, name)
+        return
+
+    AppCommand.objects.create(
+        name=name,
+        path=path,
+        added_automatically=True,
+        category=guess_category(name),
+    )
+
+
+def upgrade_category_if_unknown(command: AppCommand, name_hint: str) -> None:
+    if not command.added_automatically:
+        return
+    if command.category != AppCommand.Category.OTHER:
+        return
+
+    guessed = guess_category(name_hint)
+    if guessed != AppCommand.Category.OTHER:
+        command.category = guessed
+        command.save(update_fields=["category"])
