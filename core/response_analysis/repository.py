@@ -90,6 +90,15 @@ class ResponseRepository:
         with self.session_factory() as session:
             return list(session.execute(select(ResponsePattern)).scalars().all())
 
+    def increment_open_count(self, pattern_text: str) -> None:
+        with self.session_factory() as session:
+            pattern = session.scalars(
+                select(ResponsePattern).where(ResponsePattern.pattern == pattern_text)
+            ).first()
+            if pattern:
+                pattern.open_count += 1
+                session.commit()
+
     def exists(self, pattern: str) -> bool:
         return self.find_by_pattern(pattern) is not None
 

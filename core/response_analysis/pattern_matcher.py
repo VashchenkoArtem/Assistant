@@ -1,3 +1,4 @@
+# core/response_analysis/pattern_matcher.py
 from __future__ import annotations
 
 from typing import Optional
@@ -33,6 +34,7 @@ class PatternMatcher:
                 continue
 
             candidate_text = pattern.pattern.lower().strip()
+
             if candidate_text == normalized:
                 score = self.config.exact_match_confidence
                 if score > best_score:
@@ -42,12 +44,18 @@ class PatternMatcher:
 
             if candidate_text in normalized or normalized in candidate_text:
                 score = self.config.phrase_match_confidence
-                if score > best_score:
+
+                if score == best_score and best_match is not None:
+                    if pattern.open_count > best_match.open_count:
+                        best_match = pattern
+                elif score > best_score:
                     best_match = pattern
                     best_score = score
 
         if best_match is None:
             return None
+
+        self.repository.increment_open_count(best_match.pattern)
 
         return ResponseAnalysis(
             category=ResponseCategory(best_match.category),
