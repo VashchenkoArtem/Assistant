@@ -1,4 +1,3 @@
-# core/response_analysis/pattern_matcher.py
 from __future__ import annotations
 
 from typing import Optional
@@ -27,6 +26,8 @@ class PatternMatcher:
 
         best_match = None
         best_score = -1.0
+        
+        from core.models import AppCommand
 
         for pattern in candidate_patterns:
             pattern_category = ResponseCategory(pattern.category)
@@ -34,7 +35,7 @@ class PatternMatcher:
                 continue
 
             candidate_text = pattern.pattern.lower().strip()
-
+            
             if candidate_text == normalized:
                 score = self.config.exact_match_confidence
                 if score > best_score:
@@ -44,10 +45,19 @@ class PatternMatcher:
 
             if candidate_text in normalized or normalized in candidate_text:
                 score = self.config.phrase_match_confidence
-
+                
                 if score == best_score and best_match is not None:
-                    if pattern.open_count > best_match.open_count:
-                        best_match = pattern
+                    try:
+                        current_cmd = AppCommand.objects.filter(id=pattern.command_id).first()
+                        best_cmd = AppCommand.objects.filter(id=best_match.command_id).first()
+                        
+                        if current_cmd and best_cmd:
+                            if current_cmd.open_count > best_cmd.open_count:
+                                best_match = pattern
+                        elif current_cmd and not best_cmd:
+                            best_match = pattern
+                    except AttributeError:
+                        pass
                 elif score > best_score:
                     best_match = pattern
                     best_score = score
@@ -55,7 +65,11 @@ class PatternMatcher:
         if best_match is None:
             return None
 
-        self.repository.increment_open_count(best_match.pattern)
+        try:
+            if hasattr(best_match, 'command_id') and best_match.command_id is not None:
+                self.repository.increment_command_open_count(best_match.command_id)
+        except Exception:
+            pass
 
         return ResponseAnalysis(
             category=ResponseCategory(best_match.category),
