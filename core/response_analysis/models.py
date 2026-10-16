@@ -38,7 +38,6 @@ class ResponsePattern(Base):
     pattern: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     category: Mapped[str] = mapped_column(String(32), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
-    open_counter: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     def __repr__(self) -> str:
         return f"ResponsePattern(pattern={self.pattern!r}, category={self.category!r})"
