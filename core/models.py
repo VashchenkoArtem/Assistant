@@ -23,7 +23,7 @@ class AppCommand(models.Model):
     aliases = models.CharField(max_length= 255, blank= True)
     added_automatically = models.BooleanField(default= False)
 
-    open_count = models.IntegerField(defaut= 0)
+    open_count = models.IntegerField(default= 0)
 
     def __str__(self):
         return f"Команда з назвою {self.name} та шляхом {self.path}"
