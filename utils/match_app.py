@@ -34,6 +34,14 @@ def get_known_apps():
         apps[command.name] = path
     return apps
 
+
+def sync_installed_apps(apps: Mapping[str, str] | None = None) -> int:
+    discovered_apps = apps if apps is not None else get_list_installed_apps()
+    for name, path in discovered_apps.items():
+        register_found_app(name=name, path=path)
+    return len(discovered_apps)
+
+
 def get_app_open_counts(app_names: Iterable[str]) -> dict[str, int]:
     counts = {}
     rows = AppCommand.objects.filter(name__in=app_names).values_list(
@@ -48,6 +56,58 @@ def _normalize_app_name(value: str) -> str:
     normalized = NON_ALPHANUMERIC.sub(" ", value.lower()).strip()
     normalized = re.sub(r"\s+", " ", normalized)
     return normalized
+
+
+def find_exact_match(
+    word: str,
+    apps: Mapping[str, str],
+    open_counts: Mapping[str, int] | None = None,
+) -> tuple[str, str] | None:
+    query = _normalize_app_query(word)
+    if not query:
+        return None
+
+    query_variants = {query, transliterate(query)}
+    exact_matches = [
+        (name, path)
+        for name, path in apps.items()
+        if _normalize_app_name(name) in query_variants
+        or transliterate(_normalize_app_name(name)) in query_variants
+    ]
+    if not exact_matches:
+        return None
+
+    usage_counts = open_counts or {}
+    return max(
+        exact_matches,
+        key=lambda app: (usage_counts.get(app[0], 0), app[0].casefold()),
+    )
+
+
+def find_similar_apps(
+    word: str,
+    apps: Mapping[str, str],
+    threshold: float = THRESHOLD,
+    open_counts: Mapping[str, int] | None = None,
+    limit: int = 5,
+) -> list[tuple[str, str]]:
+    query = _normalize_app_query(word)
+    if not query:
+        return []
+
+    usage_counts = open_counts or {}
+    ranked_apps = [
+        (name, path, _similarity(query, _normalize_app_name(name)))
+        for name, path in apps.items()
+    ]
+    similar_apps = [
+        app for app in ranked_apps if threshold <= app[2] < 1.0
+    ]
+    similar_apps.sort(
+        key=lambda app: (usage_counts.get(app[0], 0), app[2], app[0].casefold()),
+        reverse=True,
+    )
+    return [(name, path) for name, path, _score in similar_apps[:limit]]
 
 
 def _normalize_app_query(value: str) -> str:

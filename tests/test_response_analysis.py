@@ -1,4 +1,5 @@
 import pytest
+from sqlalchemy import select
 
 from core.response_analysis import (
     DecisionEngine,
@@ -12,6 +13,7 @@ from core.response_analysis import (
     SemanticAnalyzer,
     TextNormalizer,
 )
+from core.response_analysis.models import ResponseConfirmation, ResponseRejection
 
 
 def make_repository(tmp_path):
@@ -170,3 +172,35 @@ def test_learning_rejects_long_sentence_candidate(tmp_path):
         0.9,
     )
     assert candidate is None
+
+
+def test_confirmation_and_rejection_decisions_use_separate_tables(tmp_path):
+    repository = make_repository(tmp_path)
+
+    repository.record_decision(
+        "так",
+        ResponseCategory.CONFIRMATION,
+        context="Запам'ятати фразу?",
+        candidate="звісно",
+        confidence=0.95,
+    )
+    repository.record_decision(
+        "не треба",
+        ResponseCategory.REJECTION,
+        context="Запам'ятати фразу?",
+        candidate="не потрібно",
+        confidence=0.9,
+    )
+
+    with repository.session_factory() as session:
+        confirmations = session.execute(
+            select(ResponseConfirmation)
+        ).scalars().all()
+        rejections = session.execute(select(ResponseRejection)).scalars().all()
+
+    assert [(item.response, item.candidate) for item in confirmations] == [
+        ("так", "звісно")
+    ]
+    assert [(item.response, item.candidate) for item in rejections] == [
+        ("не треба", "не потрібно")
+    ]

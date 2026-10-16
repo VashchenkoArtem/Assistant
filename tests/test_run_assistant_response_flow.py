@@ -2,6 +2,7 @@ import os
 from collections.abc import Iterable
 from unittest.mock import Mock, patch
 import pytest
+from sqlalchemy import select
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "Assistant.settings")
 
@@ -14,12 +15,14 @@ from core.management.commands.run_assistant import Command
 from core.response_analysis import (
     ResponseAnalysis,
     DialogContext,
+    ResponseCandidate,
     ResponseCategory,
     ResponseAnalyzer,
     ResponseLearner,
     ResponseRepository,
     ResponseSource,
 )
+from core.response_analysis.models import ResponseConfirmation, ResponseRejection
 from utils import voicing_answer
 
 
@@ -502,6 +505,43 @@ def test_app_search_uses_open_count_only_after_similarity_tie(tmp_path):
     open_app.assert_called_once_with(path="C:\\Apps\\steam-alt.exe")
 
 
+def test_fuzzy_app_search_lists_suggestions_and_executes_selected_app(tmp_path):
+    command, open_app = make_command(tmp_path, [])
+    command.pending_app = None
+    suggestions = [
+        ("Steam Tools", "C:\\Apps\\steam-tools.exe"),
+        ("Steam", "C:\\Apps\\steam.exe"),
+    ]
+
+    with (
+        patch.object(run_assistant, "get_known_apps", return_value=dict(suggestions)),
+        patch.object(
+            run_assistant,
+            "get_app_open_counts",
+            return_value={"Steam": 2, "Steam Tools": 20},
+        ),
+        patch.object(run_assistant, "find_exact_match", return_value=None),
+        patch.object(run_assistant, "find_similar_apps", return_value=suggestions),
+        patch.object(run_assistant, "register_found_app") as register,
+        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+    ):
+        command.doing_task("відкрий Steem")
+
+        assert command.pending_app is not None
+        assert command.pending_app["awaiting_selection"] is True
+        assert "1. Steam Tools" in speak.call_args.args[0]
+        open_app.assert_not_called()
+
+        command.doing_task("2")
+
+    open_app.assert_called_once_with(path="C:\\Apps\\steam.exe")
+    register.assert_called_once_with(
+        name="Steam",
+        path="C:\\Apps\\steam.exe",
+    )
+    assert command.pending_app is None
+
+
 def test_closing_app_does_not_increment_open_count(tmp_path, increment):
     command, _ = make_command(tmp_path, [])
     command.pending_app = None
@@ -536,6 +576,40 @@ def test_confirmed_new_app_increments_open_count(tmp_path, increment):
 
     open_app.assert_called_once_with("C:\\Apps\\example.exe")
     increment.assert_called_once_with(register.return_value)
+    with command.response_repository.session_factory() as session:
+        decisions = session.execute(
+            select(ResponseConfirmation)
+        ).scalars().all()
+    assert [(decision.response, decision.candidate) for decision in decisions] == [
+        ("так", "Example App")
+    ]
+
+
+def test_rejected_learning_candidate_is_recorded_separately(tmp_path):
+    command, open_app = make_command(
+        tmp_path,
+        [ResponseAnalysis(ResponseCategory.REJECTION, 1.0)],
+    )
+    command.pending_learning_candidate = ResponseCandidate(
+        text="може бути",
+        category=ResponseCategory.CONFIRMATION,
+        confidence=0.9,
+    )
+
+    with (
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+        patch.object(run_assistant, "register_found_app"),
+    ):
+        command.handle_learning_confirmation("ні")
+
+    with command.response_repository.session_factory() as session:
+        decisions = session.execute(
+            select(ResponseRejection)
+        ).scalars().all()
+    assert [(decision.response, decision.candidate) for decision in decisions] == [
+        ("ні", "може бути")
+    ]
+    open_app.assert_called_once_with("C:\\Apps\\example.exe")
 
 
 @pytest.mark.parametrize("answer", ["точно", "вірно", "yes"])

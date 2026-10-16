@@ -43,6 +43,26 @@ class ResponsePattern(Base):
         return f"ResponsePattern(pattern={self.pattern!r}, category={self.category!r})"
 
 
+class ResponseConfirmation(Base):
+    __tablename__ = "response_confirmations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    response: Mapped[str] = mapped_column(String(255), nullable=False)
+    context: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    candidate: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+
+
+class ResponseRejection(Base):
+    __tablename__ = "response_rejections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    response: Mapped[str] = mapped_column(String(255), nullable=False)
+    context: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    candidate: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+
+
 @dataclass
 class DialogContext:
     state: DialogState = DialogState.IDLE

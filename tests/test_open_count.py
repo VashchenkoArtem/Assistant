@@ -15,6 +15,7 @@ from utils.match_app import (
     get_app_open_counts,
     increment_open_count,
     register_found_app,
+    sync_installed_apps,
 )
 
 
@@ -77,3 +78,27 @@ def test_get_app_open_counts_returns_frequency_for_requested_apps(memory_db):
     increment_open_count(other)
 
     assert get_app_open_counts(["Steam"]) == {"Steam": 2}
+
+
+def test_sync_installed_apps_saves_every_discovered_app(memory_db):
+    count = sync_installed_apps(
+        {
+            "Steam": "C:\\Apps\\steam.exe",
+            "Spotify": "appx://Spotify!App",
+        }
+    )
+
+    assert count == 2
+    assert set(AppCommand.objects.values_list("name", flat=True)) == {
+        "Steam",
+        "Spotify",
+    }
+
+
+def test_sync_installed_apps_preserves_existing_open_counts(memory_db):
+    steam = register_found_app(name="Steam", path="C:\\Apps\\steam.exe")
+    increment_open_count(steam)
+
+    sync_installed_apps({"Steam": "C:\\Apps\\steam.exe"})
+
+    assert AppCommand.objects.get(name="Steam").open_count == 1

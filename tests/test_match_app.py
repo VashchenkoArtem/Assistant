@@ -7,7 +7,11 @@ import django
 django.setup()
 
 import utils.match_app as match_app
-from utils.match_app import find_best_match
+from utils.match_app import (
+    find_best_match,
+    find_exact_match,
+    find_similar_apps,
+)
 
 
 def test_ignores_generic_program_word_and_selects_exact_app_name():
@@ -114,3 +118,31 @@ def test_open_frequency_does_not_resolve_close_similarity_ambiguity(monkeypatch)
         apps,
         open_counts={"Steam": 0, "Steam Tools": 100},
     ) == (None, None)
+
+
+def test_exact_match_is_selected_before_similar_candidates():
+    apps = {
+        "Steam": "C:\\Apps\\steam.exe",
+        "Steem": "C:\\Apps\\steem.exe",
+    }
+
+    assert find_exact_match("steam", apps) == ("Steam", "C:\\Apps\\steam.exe")
+
+
+def test_similar_apps_are_sorted_by_open_frequency(monkeypatch):
+    apps = {
+        "Steam": "C:\\Apps\\steam.exe",
+        "Steam Tools": "C:\\Apps\\steam-tools.exe",
+        "Steam Deck": "C:\\Apps\\steam-deck.exe",
+    }
+    monkeypatch.setattr(match_app, "_similarity", lambda _query, _name: 0.8)
+
+    assert find_similar_apps(
+        "steem",
+        apps,
+        open_counts={"Steam": 2, "Steam Tools": 100, "Steam Deck": 12},
+    ) == [
+        ("Steam Tools", "C:\\Apps\\steam-tools.exe"),
+        ("Steam Deck", "C:\\Apps\\steam-deck.exe"),
+        ("Steam", "C:\\Apps\\steam.exe"),
+    ]

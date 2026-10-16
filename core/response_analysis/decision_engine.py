@@ -15,6 +15,7 @@ class DecisionEngine:
         {
             "так",
             "да",
+            "д",
             "ага",
             "угу",
             "добре",
@@ -43,6 +44,8 @@ class DecisionEngine:
     SHORT_REJECTIONS = frozenset(
         {
             "ні",
+            "ніт",
+            "н",
             "не",
             "нє",
             "неа",

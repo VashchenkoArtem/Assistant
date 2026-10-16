@@ -6,7 +6,13 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from .config import DEFAULT_CONFIG
-from .models import Base, ResponseCategory, ResponsePattern
+from .models import (
+    Base,
+    ResponseCategory,
+    ResponseConfirmation,
+    ResponsePattern,
+    ResponseRejection,
+)
 
 
 class ResponseRepository:
@@ -60,6 +66,36 @@ class ResponseRepository:
             if self.exists(normalized_pattern):
                 raise ValueError(f"Pattern '{normalized_pattern}' already exists.")
             item = ResponsePattern(pattern=normalized_pattern, category=category.value, confidence=confidence)
+            session.add(item)
+            session.commit()
+            session.refresh(item)
+            return item
+
+    def record_decision(
+        self,
+        response: str,
+        category: ResponseCategory,
+        context: str = "",
+        candidate: str = "",
+        confidence: float = 1.0,
+    ) -> ResponseConfirmation | ResponseRejection:
+        response = response.strip()
+        if not response:
+            raise ValueError("Response cannot be empty.")
+        if category == ResponseCategory.CONFIRMATION:
+            decision_type = ResponseConfirmation
+        elif category == ResponseCategory.REJECTION:
+            decision_type = ResponseRejection
+        else:
+            raise ValueError("Only confirmations and rejections can be recorded.")
+
+        with self.session_factory() as session:
+            item = decision_type(
+                response=response,
+                context=context,
+                candidate=candidate,
+                confidence=confidence,
+            )
             session.add(item)
             session.commit()
             session.refresh(item)
