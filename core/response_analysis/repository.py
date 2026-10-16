@@ -94,6 +94,7 @@ class ResponseRepository:
             return list(session.execute(select(ResponsePattern)).scalars().all())
 
     def increment_command_open_count(self, command_id: int) -> None:
+        print(AppCommand.objects.filter(id=command_id))
         AppCommand.objects.filter(id=command_id).update(
             open_count=F('open_count') + 1
     )
