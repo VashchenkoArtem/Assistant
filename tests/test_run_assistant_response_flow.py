@@ -52,6 +52,13 @@ def make_command(tmp_path, results):
     return command, open_app
 
 
+@pytest.fixture(autouse=True)
+def increment(request):
+    # Flow tests mock register_found_app, so they must not touch the real DB.
+    with patch.object(run_assistant, "increment_open_count") as mocked:
+        yield mocked
+
+
 def test_listener_does_not_record_while_assistant_is_speaking():
     recognizer = Mock()
     voicing_answer.VOICE_ACTIVE.set()
@@ -420,3 +427,78 @@ def test_rejecting_learning_does_not_cancel_pending_app_action(tmp_path):
     assert command.pending_app is None
     open_app.assert_called_once_with("C:\\Apps\\example.exe")
     register.assert_called_once()
+
+
+def _open_known_app(command, spoken="відкрий програму Steam"):
+    with (
+        patch.object(
+            run_assistant,
+            "get_known_apps",
+            return_value={"Steam": "C:\\Apps\\steam.exe"},
+        ),
+        patch.object(run_assistant, "is_unknown", return_value=False),
+        patch.object(run_assistant, "register_found_app") as register,
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+    ):
+        command.doing_task(spoken)
+    return register
+
+
+def test_opening_known_app_increments_open_count_once(tmp_path, increment):
+    command, open_app = make_command(tmp_path, [])
+    command.pending_app = None
+
+    register = _open_known_app(command)
+
+    open_app.assert_called_once_with(path="C:\\Apps\\steam.exe")
+    increment.assert_called_once_with(register.return_value)
+
+
+def test_closing_app_does_not_increment_open_count(tmp_path, increment):
+    command, _ = make_command(tmp_path, [])
+    command.pending_app = None
+
+    _open_known_app(command, spoken="закрий програму Steam")
+
+    increment.assert_not_called()
+
+
+def test_failed_open_does_not_increment_open_count(tmp_path, increment):
+    command, open_app = make_command(tmp_path, [])
+    command.pending_app = None
+    open_app.return_value = False
+
+    _open_known_app(command)
+
+    open_app.assert_called_once()
+    increment.assert_not_called()
+
+
+def test_confirmed_new_app_increments_open_count(tmp_path, increment):
+    command, open_app = make_command(
+        tmp_path,
+        [ResponseAnalysis(ResponseCategory.CONFIRMATION, 1.0, source=ResponseSource.PATTERN)],
+    )
+
+    with (
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+        patch.object(run_assistant, "register_found_app") as register,
+    ):
+        command.handle_confirmation("так")
+
+    open_app.assert_called_once_with("C:\\Apps\\example.exe")
+    increment.assert_called_once_with(register.return_value)
+
+
+def test_open_app_reports_success_and_failure(tmp_path):
+    command, _ = make_command(tmp_path, [])
+
+    with (
+        patch.object(run_assistant.platform, "system", return_value="Linux"),
+        patch.object(run_assistant.subprocess, "Popen") as popen,
+    ):
+        assert Command.open_app(command, "/usr/bin/true") is True
+
+        popen.side_effect = OSError("boom")
+        assert Command.open_app(command, "/nonexistent") is False
+

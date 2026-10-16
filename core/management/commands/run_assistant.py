@@ -7,7 +7,7 @@ import speech_recognition
 from utils.match_app import get_known_apps, find_best_match
 import platform, os, subprocess
 from utils.voicing_answer import run_voice, voicing_and_printing_answer, voicing_text
-from utils.match_app import register_found_app, is_unknown
+from utils.match_app import increment_open_count, register_found_app, is_unknown
 from core.models import AppCommand
 from utils.voicing_answer import (
     AUDIO_LOCK,
@@ -111,51 +111,6 @@ class Command(BaseCommand):
             if VOICE_ACTIVE.is_set():
                 return None
             return audio
-
-    def handle_open_close(self, text: str, is_open: bool):
-        clean_name = APP_COMMAND_PATTERN.sub("", text).strip()
-        clean_name = GENERIC_APP_PREFIX.sub("", clean_name).strip()
-
-        if not clean_name:
-            voicing_and_printing_answer("Яку саме програму ви хочете запустити?")
-            return
-
-        self.pending_app = {
-            "name": clean_name,
-            "is_open": is_open,
-            "awaiting_name": False
-        }
-
-        voicing_and_printing_answer(f"Чи правильно я почув назву? Назва програми: {clean_name}?")
-
-    def handle_app_name_correction(self, text: str):
-        if not self.pending_app:
-            return
-        
-        clean_name = text.strip()
-        if clean_name.lower() in DENY_WORDS or clean_name.lower() in CANCEL_ACTION_WORDS:
-            self.cancel_pending_action()
-            return
-
-        self.pending_app["name"] = clean_name
-        self.pending_app["awaiting_name"] = False
-        voicing_and_printing_answer(f"Добре, шукаю виправлену назву. Назва програми: {clean_name}?")
-
-    def handle_learning_confirmation(self, text: str):
-        self.pending_learning_candidate = None
-        voicing_and_printing_answer("Добре, я запам'ятала цю команду.")
-
-    def stop_assistant(self):
-        self.run = False
-        voicing_and_printing_answer("Завершую роботу. До побачення!")
-
-    def pause_assistant(self):
-        self.paused = True
-        voicing_and_printing_answer("Роботу призупинено.")
-
-    def resume_assistant(self):
-        self.paused = False
-        voicing_and_printing_answer("Слухаю вас, роботу відновлено.")
 
     def doing_task(self, text):
         lowered = text.strip().lower()
@@ -333,13 +288,14 @@ class Command(BaseCommand):
         if pending_app is None:
             return
 
-        register_found_app(
+        command = register_found_app(
             name=pending_app["name"],
             path=pending_app["path"],
         )
 
         if pending_app["is_open"]:
-            self.open_app(pending_app["path"])
+            if self.open_app(pending_app["path"]):
+                increment_open_count(command)
         else:
             app_path = pending_app["path"]
             self.close_app(
@@ -413,18 +369,19 @@ class Command(BaseCommand):
 
         voicing_and_printing_answer(f"Знайшла програму {name}")
 
+        command = register_found_app(name=name, path=path)
+
         if is_open:
             voicing_and_printing_answer(f"Відкриваю {name}")
-            register_found_app(name=name, path=path)
-            self.open_app(path=path)
+            if self.open_app(path=path):
+                increment_open_count(command)
         else:
             voicing_and_printing_answer(f"Закриваю {name}")
-            register_found_app(name=name, path=path)
             self.close_app(
                 app_name=path if path.startswith("appx://") else os.path.basename(path)
             )
 
-    def open_app(self, path):
+    def open_app(self, path) -> bool:
         try:
             system = platform.system()
             if system == "Windows":
@@ -439,6 +396,8 @@ class Command(BaseCommand):
                 subprocess.Popen(args=[path])
         except Exception as error:
             self.stdout.write(self.style.WARNING(f"Помилка відкриття: {error}"))
+            return False
+        return True
 
     def close_app(self, app_name: str):
         try:

@@ -2,14 +2,11 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from django.db.models import F
-
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from .config import DEFAULT_CONFIG
 from .models import Base, ResponseCategory, ResponsePattern
-from core.models import AppCommand
 
 
 class ResponseRepository:
@@ -92,13 +89,6 @@ class ResponseRepository:
     def get_all(self) -> list[ResponsePattern]:
         with self.session_factory() as session:
             return list(session.execute(select(ResponsePattern)).scalars().all())
-
-    def increment_command_open_count(self, command_id: int) -> None:
-        print(AppCommand.objects.filter(id=command_id))
-        AppCommand.objects.filter(id=command_id).update(
-            open_count=F('open_count') + 1
-    )
-
 
     def exists(self, pattern: str) -> bool:
         return self.find_by_pattern(pattern) is not None

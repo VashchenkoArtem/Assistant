@@ -1,6 +1,8 @@
 import difflib
 import re
 
+from django.db.models import F
+
 from utils.transliterate import transliterate
 from utils.categorize import guess_category
 
@@ -117,20 +119,24 @@ def is_unknown(name, path):
 
 
 
-def register_found_app(name: str, path: str) -> None:
+def register_found_app(name: str, path: str) -> AppCommand:
 
     existing = AppCommand.objects.filter(path=path).first() or AppCommand.objects.filter(name=name).first()
 
     if existing:
         upgrade_category_if_unknown(existing, name)
-        return
+        return existing
 
-    AppCommand.objects.create(
+    return AppCommand.objects.create(
         name=name,
         path=path,
         added_automatically=True,
         category=guess_category(name),
     )
+
+
+def increment_open_count(command: AppCommand) -> None:
+    AppCommand.objects.filter(pk=command.pk).update(open_count=F("open_count") + 1)
 
 
 def upgrade_category_if_unknown(command: AppCommand, name_hint: str) -> None:
