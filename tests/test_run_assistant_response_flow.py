@@ -59,6 +59,25 @@ def increment(request):
         yield mocked
 
 
+@pytest.fixture(autouse=True)
+def app_open_counts():
+    with patch.object(run_assistant, "get_app_open_counts", return_value={}):
+        yield
+
+
+def test_recognizer_is_calibrated_and_keeps_short_phrases():
+    recognizer = Mock()
+    source = object()
+
+    Command.configure_recognizer(recognizer, source)
+
+    recognizer.adjust_for_ambient_noise.assert_called_once_with(source, duration=1)
+    assert recognizer.dynamic_energy_threshold is True
+    assert recognizer.phrase_threshold == 0.15
+    assert recognizer.pause_threshold == 0.8
+    assert recognizer.non_speaking_duration == 0.5
+
+
 def test_listener_does_not_record_while_assistant_is_speaking():
     recognizer = Mock()
     voicing_answer.VOICE_ACTIVE.set()
@@ -452,6 +471,35 @@ def test_opening_known_app_increments_open_count_once(tmp_path, increment):
 
     open_app.assert_called_once_with(path="C:\\Apps\\steam.exe")
     increment.assert_called_once_with(register.return_value)
+
+
+def test_app_search_uses_open_count_only_after_similarity_tie(tmp_path):
+    command, open_app = make_command(tmp_path, [])
+    command.pending_app = None
+    command.pending_learning_candidate = None
+
+    with (
+        patch.object(
+            run_assistant,
+            "get_known_apps",
+            return_value={
+                "Steam": "C:\\Apps\\steam.exe",
+                "steam": "C:\\Apps\\steam-alt.exe",
+            },
+        ),
+        patch.object(
+            run_assistant,
+            "get_app_open_counts",
+            return_value={"Steam": 1, "steam": 8},
+        ) as get_open_counts,
+        patch.object(run_assistant, "is_unknown", return_value=False),
+        patch.object(run_assistant, "register_found_app"),
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+    ):
+        command.doing_task("відкрий steam")
+
+    get_open_counts.assert_called_once()
+    open_app.assert_called_once_with(path="C:\\Apps\\steam-alt.exe")
 
 
 def test_closing_app_does_not_increment_open_count(tmp_path, increment):

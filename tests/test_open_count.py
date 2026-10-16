@@ -11,7 +11,11 @@ from django.core.management import call_command
 from django.db import connection
 
 from core.models import AppCommand
-from utils.match_app import increment_open_count, register_found_app
+from utils.match_app import (
+    get_app_open_counts,
+    increment_open_count,
+    register_found_app,
+)
 
 
 @pytest.fixture
@@ -63,3 +67,13 @@ def test_increment_uses_db_value_not_stale_instance(memory_db):
     increment_open_count(stale)  # `stale.open_count` is still 0 in memory
 
     assert AppCommand.objects.get(pk=stale.pk).open_count == 2
+
+
+def test_get_app_open_counts_returns_frequency_for_requested_apps(memory_db):
+    steam = register_found_app(name="Steam", path="C:\\Apps\\steam.exe")
+    other = register_found_app(name="Other", path="C:\\Apps\\other.exe")
+    increment_open_count(steam)
+    increment_open_count(steam)
+    increment_open_count(other)
+
+    assert get_app_open_counts(["Steam"]) == {"Steam": 2}

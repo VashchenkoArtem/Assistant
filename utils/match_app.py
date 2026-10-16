@@ -1,5 +1,6 @@
 import difflib
 import re
+from collections.abc import Iterable, Mapping
 
 from django.db.models import F
 
@@ -32,6 +33,16 @@ def get_known_apps():
 
         apps[command.name] = path
     return apps
+
+def get_app_open_counts(app_names: Iterable[str]) -> dict[str, int]:
+    counts = {}
+    rows = AppCommand.objects.filter(name__in=app_names).values_list(
+        "name", "open_count"
+    )
+    for name, open_count in rows:
+        counts[name] = max(open_count, counts.get(name, 0))
+    return counts
+
 
 def _normalize_app_name(value: str) -> str:
     normalized = NON_ALPHANUMERIC.sub(" ", value.lower()).strip()
@@ -82,7 +93,12 @@ def _similarity(query: str, app_name: str) -> float:
     return best_score
 
 
-def find_best_match(word, apps, threshold=THRESHOLD):
+def find_best_match(
+    word: str,
+    apps: Mapping[str, str],
+    threshold: float = THRESHOLD,
+    open_counts: Mapping[str, int] | None = None,
+) -> tuple[str | None, str | None]:
     if not word or not apps:
         return None, None
 
@@ -90,9 +106,14 @@ def find_best_match(word, apps, threshold=THRESHOLD):
     if not formatted_word:
         return None, None
 
+    usage_counts = open_counts or {}
     ranked_matches = sorted(
         (
-            (_similarity(formatted_word, _normalize_app_name(name)), name)
+            (
+                _similarity(formatted_word, _normalize_app_name(name)),
+                usage_counts.get(name, 0),
+                name,
+            )
             for name in apps
         ),
         reverse=True,
@@ -100,14 +121,15 @@ def find_best_match(word, apps, threshold=THRESHOLD):
     if not ranked_matches:
         return None, None
 
-    best_ratio, best_name = ranked_matches[0]
+    best_ratio, best_open_count, best_name = ranked_matches[0]
     if best_ratio < threshold:
         return None, None
 
     if len(ranked_matches) > 1:
-        second_ratio, _ = ranked_matches[1]
+        second_ratio, second_open_count, _ = ranked_matches[1]
         if best_ratio < 1.0 and best_ratio - second_ratio < MIN_MATCH_MARGIN:
-            return None, None
+            if best_ratio != second_ratio or best_open_count == second_open_count:
+                return None, None
 
     return best_name, apps[best_name]
 

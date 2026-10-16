@@ -6,6 +6,7 @@ import django
 
 django.setup()
 
+import utils.match_app as match_app
 from utils.match_app import find_best_match
 
 
@@ -61,3 +62,55 @@ def test_cyrillic_app_name_prefers_standalone_app_over_internal_tool():
         "Cursor",
         "C:\\Apps\\Cursor.exe",
     )
+
+
+def test_similarity_takes_precedence_over_open_frequency(monkeypatch):
+    apps = {
+        "Steam": "C:\\Apps\\steam.exe",
+        "Steam Tools": "C:\\Apps\\steam-tools.exe",
+    }
+    scores = {"steam": 0.9, "steam tools": 0.8}
+    monkeypatch.setattr(
+        match_app,
+        "_similarity",
+        lambda _query, name: scores[name],
+    )
+
+    assert find_best_match(
+        "steam",
+        apps,
+        open_counts={"Steam": 1, "Steam Tools": 100},
+    ) == ("Steam", "C:\\Apps\\steam.exe")
+
+
+def test_open_frequency_breaks_equal_similarity_tie(monkeypatch):
+    apps = {
+        "Steam": "C:\\Apps\\steam.exe",
+        "Steam Tools": "C:\\Apps\\steam-tools.exe",
+    }
+    monkeypatch.setattr(match_app, "_similarity", lambda _query, _name: 0.9)
+
+    assert find_best_match(
+        "steam",
+        apps,
+        open_counts={"Steam": 2, "Steam Tools": 12},
+    ) == ("Steam Tools", "C:\\Apps\\steam-tools.exe")
+
+
+def test_open_frequency_does_not_resolve_close_similarity_ambiguity(monkeypatch):
+    apps = {
+        "Steam": "C:\\Apps\\steam.exe",
+        "Steam Tools": "C:\\Apps\\steam-tools.exe",
+    }
+    scores = {"steam": 0.9, "steam tools": 0.89}
+    monkeypatch.setattr(
+        match_app,
+        "_similarity",
+        lambda _query, name: scores[name],
+    )
+
+    assert find_best_match(
+        "steam",
+        apps,
+        open_counts={"Steam": 0, "Steam Tools": 100},
+    ) == (None, None)

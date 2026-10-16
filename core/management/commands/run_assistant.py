@@ -4,7 +4,7 @@ import re
 from utils.list_apps import get_list_installed_apps
 from django.core.management.base import BaseCommand
 import speech_recognition
-from utils.match_app import get_known_apps, find_best_match
+from utils.match_app import get_known_apps, get_app_open_counts, find_best_match
 import platform, os, subprocess
 from utils.voicing_answer import run_voice, voicing_and_printing_answer, voicing_text
 from utils.match_app import increment_open_count, register_found_app, is_unknown
@@ -54,13 +54,8 @@ class Command(BaseCommand):
         recognizer = cast(Any, speech_recognition.Recognizer())
         microphone = cast(Any, speech_recognition.Microphone())
 
-        recognizer.energy_threshold = 100           
-        recognizer.dynamic_energy_threshold = False  
-        recognizer.phrase_threshold = 0.0           
-        recognizer.pause_threshold = 0.5            
-        recognizer.non_speaking_duration = 0.4      
-
         with microphone as source:
+            self.configure_recognizer(recognizer, source)
             self.stdout.write("Слухаю вас...")
 
             while self.run:
@@ -90,6 +85,14 @@ class Command(BaseCommand):
                     continue
                 except Exception as error:
                     self.stdout.write(self.style.WARNING(f"Помилка: {error}"))
+
+    @staticmethod
+    def configure_recognizer(recognizer: Any, source: Any) -> None:
+        recognizer.dynamic_energy_threshold = True
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+        recognizer.phrase_threshold = 0.15
+        recognizer.pause_threshold = 0.8
+        recognizer.non_speaking_duration = 0.5
 
     @staticmethod
     def listen_for_audio(recognizer: Any, source: Any):
@@ -332,7 +335,13 @@ class Command(BaseCommand):
 
         voicing_and_printing_answer("Починаю шукати програму...")
         apps = get_known_apps()
-        match_result = find_best_match(word=target_word, apps=apps, threshold=0.45)
+        open_counts = get_app_open_counts(apps.keys())
+        match_result = find_best_match(
+            word=target_word,
+            apps=apps,
+            threshold=0.45,
+            open_counts=open_counts,
+        )
 
         if match_result is None:
             voicing_and_printing_answer(f"Я не знайшла програму схожу на {target_word}")
