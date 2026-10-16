@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from .config import ResponseAnalysisConfig
@@ -10,6 +11,58 @@ from .text_normalizer import TextNormalizer
 
 
 class DecisionEngine:
+    SHORT_CONFIRMATIONS = frozenset(
+        {
+            "так",
+            "да",
+            "ага",
+            "угу",
+            "добре",
+            "гаразд",
+            "звичайно",
+            "звісно",
+            "авжеж",
+            "давай",
+            "можна",
+            "нехай",
+            "правильно",
+            "точно",
+            "вірно",
+            "згоден",
+            "згодна",
+            "згодні",
+            "погоджуюсь",
+            "погоджуюся",
+            "ок",
+            "окей",
+            "okay",
+            "yes",
+            "так так",
+        }
+    )
+    SHORT_REJECTIONS = frozenset(
+        {
+            "ні",
+            "не",
+            "нє",
+            "неа",
+            "нет",
+            "no",
+            "не хочу",
+            "не треба",
+            "не потрібно",
+            "неправильно",
+            "не правильно",
+            "ні ні",
+            "зовсім ні",
+            "відміна",
+            "відміни",
+            "скасуй",
+            "скасувати",
+            "не можна",
+            "неможна",
+        }
+    )
     UNCERTAINTY_PHRASES = (
         "не впевнений",
         "не впевнена",
@@ -19,6 +72,12 @@ class DecisionEngine:
         "можливо",
         "мабуть",
     )
+    NEGATION_PHRASES = (SHORT_REJECTIONS - {"не"}) | {
+        "та ні",
+        "я передумав",
+        "не зараз",
+        "не сейчас",
+    }
     PERMISSION_CONFIRMATION_PHRASES = (
         "можеш відкривати",
         "можеш відкрити",
@@ -28,6 +87,9 @@ class DecisionEngine:
         "можеш запустити",
         "можете запускати",
         "можете запустити",
+    )
+    POSITIVE_PHRASES = SHORT_CONFIRMATIONS | frozenset(
+        PERMISSION_CONFIRMATION_PHRASES
     )
 
     def __init__(
@@ -45,32 +107,18 @@ class DecisionEngine:
     @staticmethod
     def _contains_negation(text: str) -> bool:
         lowered = TextNormalizer.normalize(text)
-        negation_phrases = (
-            "не хочу",
-            "не треба",
-            "не потрібно",
-            "я передумав",
-            "скасуй",
-            "ні",
-            "та ні",
-            "не зараз",
-            "не сейчас",
+        return any(
+            re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", lowered)
+            for phrase in DecisionEngine.NEGATION_PHRASES
         )
-        return any(phrase in lowered for phrase in negation_phrases)
 
     @staticmethod
     def _contains_confirmation(text: str) -> bool:
         lowered = TextNormalizer.normalize(text)
-        positive_phrases = (
-            "так",
-            "ага",
-            "угу",
-            "добре",
-            "звичайно",
-            "давай",
-            "можна",
-        ) + DecisionEngine.PERMISSION_CONFIRMATION_PHRASES
-        return any(phrase in lowered for phrase in positive_phrases)
+        return any(
+            re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", lowered)
+            for phrase in DecisionEngine.POSITIVE_PHRASES
+        )
 
     def decide(self, text: str, dialog_context: Optional[DialogContext] = None):
         normalized = TextNormalizer.normalize(text)
@@ -81,8 +129,10 @@ class DecisionEngine:
         )
 
         clean_text = normalized.strip(".!,? ")
+        clean_text = re.sub(r"[^\w\s]", " ", clean_text)
+        clean_text = re.sub(r"\s+", " ", clean_text).strip()
 
-        if clean_text in ["так", "ага", "угу", "добре", "давай", "да", "д", "так так", "нехай", "правильно"]:
+        if clean_text in self.SHORT_CONFIRMATIONS:
             return ResponseAnalysis(
                 ResponseCategory.CONFIRMATION,
                 1.0,
@@ -90,7 +140,7 @@ class DecisionEngine:
                 ResponseSource.RULE,
             )
 
-        if clean_text in ["ні", "не", "нє", "ніт", "не хочу", "н", "нет", "no", "ні ні", "ні не вона", "зовсім ні", "не правильно", "відміна"]:
+        if clean_text in self.SHORT_REJECTIONS:
             return ResponseAnalysis(
                 ResponseCategory.REJECTION,
                 1.0,

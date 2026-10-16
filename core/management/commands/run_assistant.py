@@ -28,8 +28,6 @@ from core.response_analysis import (
 )
 
 
-CONFIRM_WORDS = ("так", "да", "правильно", "точно", "вірно", "так так", "ага")
-DENY_WORDS = ("ні", "не", "неправильно", "ні ні", "нет")
 CANCEL_ACTION_WORDS = ("скасуй", "скасувати", "скасовую", "відміна", "відміни", "відмінити")
 APP_COMMAND_PATTERN = re.compile(
     r"\b(?P<verb>відкрий|відкрити|відкривай|відкривати|"
@@ -198,26 +196,16 @@ class Command(BaseCommand):
         question = f"Чи правильно я почув назву? Назва програми: {pending_app['name']}?"
         analysis = self.analyze_response(cleaned_text, question=question)
 
-        if (
-            analysis.category == ResponseCategory.UNKNOWN
-            and cleaned_text not in CONFIRM_WORDS
-            and cleaned_text not in DENY_WORDS
-        ):
+        if analysis.category == ResponseCategory.UNKNOWN:
             voicing_and_printing_answer(
                 f"Не впевнена, чи правильно зрозуміла. {question} Відповідь: так або ні."
             )
             return
 
-        if analysis.category == ResponseCategory.REJECTION or cleaned_text in DENY_WORDS:
+        if analysis.category == ResponseCategory.REJECTION:
             pending_app["awaiting_name"] = True
             voicing_and_printing_answer(
                 "Добре, це не та програма. Назвіть її точну назву."
-            )
-            return
-
-        if analysis.category != ResponseCategory.CONFIRMATION and cleaned_text not in CONFIRM_WORDS:
-            voicing_and_printing_answer(
-                f"Не впевнена, чи правильно зрозуміла. {question} Відповідь: так або ні."
             )
             return
 

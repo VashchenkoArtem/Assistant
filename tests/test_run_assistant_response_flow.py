@@ -490,6 +490,37 @@ def test_confirmed_new_app_increments_open_count(tmp_path, increment):
     increment.assert_called_once_with(register.return_value)
 
 
+@pytest.mark.parametrize("answer", ["точно", "вірно", "yes"])
+def test_short_confirmation_variants_complete_pending_app_action(tmp_path, answer):
+    command, open_app = make_command(tmp_path, [])
+    command.response_analyzer = ResponseAnalyzer(command.response_repository)
+
+    with (
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+        patch.object(run_assistant, "register_found_app"),
+    ):
+        command.handle_confirmation(answer)
+
+    open_app.assert_called_once_with("C:\\Apps\\example.exe")
+    assert command.pending_app is None
+
+
+@pytest.mark.parametrize("answer", ["нє", "неа", "no"])
+def test_short_rejection_variants_reject_pending_app_name(tmp_path, answer):
+    command, open_app = make_command(tmp_path, [])
+    command.response_analyzer = ResponseAnalyzer(command.response_repository)
+
+    with (
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+        patch.object(run_assistant, "register_found_app"),
+    ):
+        command.handle_confirmation(answer)
+
+    open_app.assert_not_called()
+    assert command.pending_app is not None
+    assert command.pending_app["awaiting_name"] is True
+
+
 def test_open_app_reports_success_and_failure(tmp_path):
     command, _ = make_command(tmp_path, [])
 
@@ -501,4 +532,3 @@ def test_open_app_reports_success_and_failure(tmp_path):
 
         popen.side_effect = OSError("boom")
         assert Command.open_app(command, "/nonexistent") is False
-

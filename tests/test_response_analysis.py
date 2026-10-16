@@ -1,3 +1,5 @@
+import pytest
+
 from core.response_analysis import (
     DecisionEngine,
     DialogContext,
@@ -63,6 +65,68 @@ def test_decision_engine_recognizes_permission_as_builtin_confirmation(tmp_path)
 
     assert result.category == ResponseCategory.CONFIRMATION
     assert result.source.value == "RULE"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "так",
+        "Так!",
+        "так,",
+        "да",
+        "ага",
+        "угу",
+        "звісно",
+        "точно",
+        "вірно",
+        "yes",
+        "д",
+    ],
+)
+def test_decision_engine_recognizes_common_short_confirmations_as_rules(
+    tmp_path, answer
+):
+    engine = DecisionEngine(make_repository(tmp_path))
+
+    result = engine.decide(answer)
+
+    assert result.category == ResponseCategory.CONFIRMATION
+    assert result.confidence == 1.0
+    assert result.source.value == "RULE"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "ні",
+        "Ні!",
+        "ні,",
+        "нє",
+        "ніт",
+        "неа",
+        "нет",
+        "no",
+        "н",
+    ],
+)
+def test_decision_engine_recognizes_common_short_rejections_as_rules(
+    tmp_path, answer
+):
+    engine = DecisionEngine(make_repository(tmp_path))
+
+    result = engine.decide(answer)
+
+    assert result.category == ResponseCategory.REJECTION
+    assert result.confidence == 1.0
+    assert result.source.value == "RULE"
+
+
+def test_decision_engine_matches_short_words_at_word_boundaries(tmp_path):
+    engine = DecisionEngine(make_repository(tmp_path))
+
+    assert not engine._contains_negation("нічого")
+    assert not engine._contains_confirmation("підтакувати")
+    assert engine.decide("неможна").category == ResponseCategory.REJECTION
 
 
 def test_decision_engine_keeps_uncertain_answer_unknown(tmp_path):
