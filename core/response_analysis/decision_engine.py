@@ -80,6 +80,24 @@ class DecisionEngine:
             else (ResponseCategory.CONFIRMATION, ResponseCategory.REJECTION)
         )
 
+        clean_text = normalized.strip(".!,? ")
+
+        if clean_text in ["так", "ага", "угу", "добре", "давай", "да", "д", "так так", "нехай", "правильно"]:
+            return ResponseAnalysis(
+                ResponseCategory.CONFIRMATION,
+                1.0,
+                clean_text,
+                ResponseSource.RULE,
+            )
+
+        if clean_text in ["ні", "не", "нє", "ніт", "не хочу", "н", "нет", "no", "ні ні", "ні не вона", "зовсім ні", "не правильно", "відміна"]:
+            return ResponseAnalysis(
+                ResponseCategory.REJECTION,
+                1.0,
+                clean_text,
+                ResponseSource.RULE,
+            )
+
         if any(phrase in normalized for phrase in self.UNCERTAINTY_PHRASES):
             return ResponseAnalysis(
                 ResponseCategory.UNKNOWN,

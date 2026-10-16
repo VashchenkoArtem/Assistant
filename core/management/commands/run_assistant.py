@@ -28,8 +28,8 @@ from core.response_analysis import (
 )
 
 
-CONFIRM_WORDS = ("так", "да", "правильно", "точно", "вірно")
-DENY_WORDS = ("ні", "не", "неправильно")
+CONFIRM_WORDS = ("так", "да", "правильно", "точно", "вірно", "так так", "ага")
+DENY_WORDS = ("ні", "не", "неправильно", "ні ні", "нет")
 CANCEL_ACTION_WORDS = ("скасуй", "скасувати", "скасовую", "відміна", "відміни", "відмінити")
 APP_COMMAND_PATTERN = re.compile(
     r"\b(?P<verb>відкрий|відкрити|відкривай|відкривати|"
@@ -56,9 +56,13 @@ class Command(BaseCommand):
         recognizer = cast(Any, speech_recognition.Recognizer())
         microphone = cast(Any, speech_recognition.Microphone())
 
+        recognizer.energy_threshold = 100           
+        recognizer.dynamic_energy_threshold = False  
+        recognizer.phrase_threshold = 0.0           
+        recognizer.pause_threshold = 0.5            
+        recognizer.non_speaking_duration = 0.4      
+
         with microphone as source:
-            self.stdout.write("Почекайте, йде налаштування мікрофона...")
-            recognizer.adjust_for_ambient_noise(source= source)
             self.stdout.write("Слухаю вас...")
 
             while self.run:
@@ -80,6 +84,9 @@ class Command(BaseCommand):
                     self.doing_task(text= command_text)
 
                 except speech_recognition.UnknownValueError:
+                    
+                    if self.pending_app:
+                        self.stdout.write("Не розібрав звук. Будь ласка, повторіть: так або ні.")
                     continue
                 except speech_recognition.WaitTimeoutError:
                     continue
@@ -104,6 +111,51 @@ class Command(BaseCommand):
             if VOICE_ACTIVE.is_set():
                 return None
             return audio
+
+    def handle_open_close(self, text: str, is_open: bool):
+        clean_name = APP_COMMAND_PATTERN.sub("", text).strip()
+        clean_name = GENERIC_APP_PREFIX.sub("", clean_name).strip()
+
+        if not clean_name:
+            voicing_and_printing_answer("Яку саме програму ви хочете запустити?")
+            return
+
+        self.pending_app = {
+            "name": clean_name,
+            "is_open": is_open,
+            "awaiting_name": False
+        }
+
+        voicing_and_printing_answer(f"Чи правильно я почув назву? Назва програми: {clean_name}?")
+
+    def handle_app_name_correction(self, text: str):
+        if not self.pending_app:
+            return
+        
+        clean_name = text.strip()
+        if clean_name.lower() in DENY_WORDS or clean_name.lower() in CANCEL_ACTION_WORDS:
+            self.cancel_pending_action()
+            return
+
+        self.pending_app["name"] = clean_name
+        self.pending_app["awaiting_name"] = False
+        voicing_and_printing_answer(f"Добре, шукаю виправлену назву. Назва програми: {clean_name}?")
+
+    def handle_learning_confirmation(self, text: str):
+        self.pending_learning_candidate = None
+        voicing_and_printing_answer("Добре, я запам'ятала цю команду.")
+
+    def stop_assistant(self):
+        self.run = False
+        voicing_and_printing_answer("Завершую роботу. До побачення!")
+
+    def pause_assistant(self):
+        self.paused = True
+        voicing_and_printing_answer("Роботу призупинено.")
+
+    def resume_assistant(self):
+        self.paused = False
+        voicing_and_printing_answer("Слухаю вас, роботу відновлено.")
 
     def doing_task(self, text):
         lowered = text.strip().lower()
@@ -154,7 +206,9 @@ class Command(BaseCommand):
     @staticmethod
     def is_cancel_action(text):
         normalized = re.sub(r"[^\w\s]", "", text.lower()).strip()
-        first_word = normalized.split(maxsplit=1)[0] if normalized else ""
+        if not normalized:
+            return False
+        first_word = normalized.split(maxsplit=1)[0]
         return first_word in CANCEL_ACTION_WORDS
 
     def cancel_pending_action(self):
