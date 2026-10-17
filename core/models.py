@@ -27,3 +27,33 @@ class AppCommand(models.Model):
 
     def __str__(self):
         return f"Команда з назвою {self.name} та шляхом {self.path}"
+
+
+class ResponsePattern(models.Model):
+    pattern = models.CharField(max_length=120, unique=True)
+    category = models.CharField(max_length=32)
+    confidence = models.FloatField()
+    open_counter = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = "response_patterns"
+
+
+class ResponseConfirmation(models.Model):
+    response = models.CharField(max_length=255)
+    context = models.CharField(max_length=255, default="")
+    candidate = models.CharField(max_length=120, default="")
+    confidence = models.FloatField(default=1.0)
+
+    class Meta:
+        db_table = "response_confirmations"
+
+
+class ResponseRejection(models.Model):
+    response = models.CharField(max_length=255)
+    context = models.CharField(max_length=255, default="")
+    candidate = models.CharField(max_length=120, default="")
+    confidence = models.FloatField(default=1.0)
+
+    class Meta:
+        db_table = "response_rejections"

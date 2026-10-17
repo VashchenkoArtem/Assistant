@@ -48,7 +48,7 @@ class Command(BaseCommand):
         self.run = True
         self.pending_app: dict[str, Any] | None = None
         self.pending_learning_candidate: ResponseCandidate | None = None
-        self.response_repository = ResponseRepository("sqlite:///response_patterns.db")
+        self.response_repository = ResponseRepository()
         self.response_analyzer = ResponseAnalyzer(self.response_repository)
         self.response_learner = ResponseLearner(self.response_repository)
 

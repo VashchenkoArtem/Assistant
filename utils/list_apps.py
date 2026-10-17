@@ -1,7 +1,24 @@
 import json
 import os
 import platform
+import re
 import subprocess
+
+
+TECHNICAL_APP_NAME = re.compile(
+    r"^(?:uninstall(?:er)?|unins\d*|setup|installer|install|updater?|"
+    r"repair|modify|crashpad_handler|maintenanceservice)(?:$|[._ -])",
+    re.IGNORECASE,
+)
+
+
+def is_technical_app(name, path):
+    path_name = os.path.splitext(os.path.basename(path))[0]
+    return any(
+        TECHNICAL_APP_NAME.match(candidate.strip())
+        for candidate in (name, path_name)
+        if candidate
+    )
 
 
 def _get_windows_store_apps():
@@ -44,7 +61,9 @@ def _get_windows_store_apps():
         if not name or not app_id:
             continue
 
-        apps[name] = f"appx://{app_id}"
+        app_path = f"appx://{app_id}"
+        if not is_technical_app(name, app_path):
+            apps[name] = app_path
     return apps
 
 
@@ -97,6 +116,8 @@ def get_list_installed_apps():
                 name = os.path.splitext(file)[0]
                 full_path = os.path.join(current_path, file)
 
+                if is_technical_app(name, full_path):
+                    continue
                 installed_apps.setdefault(name, full_path)
             if current_path.count(os.sep) > search_dir.count(os.sep) + 3:
                 inside_dirs.clear()

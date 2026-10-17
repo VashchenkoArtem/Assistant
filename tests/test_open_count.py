@@ -10,9 +10,12 @@ import pytest
 from django.core.management import call_command
 from django.db import connection
 
-from core.models import AppCommand
+from core.models import (
+    AppCommand,
+)
 from utils.match_app import (
     get_app_open_counts,
+    get_known_apps,
     increment_open_count,
     register_found_app,
     sync_installed_apps,
@@ -65,7 +68,7 @@ def test_increment_open_count_counts_every_open_and_only_that_app(memory_db):
 def test_increment_uses_db_value_not_stale_instance(memory_db):
     stale = register_found_app(name="Steam", path="C:\\Apps\\steam.exe")
     increment_open_count(stale)
-    increment_open_count(stale)  # `stale.open_count` is still 0 in memory
+    increment_open_count(stale)
 
     assert AppCommand.objects.get(pk=stale.pk).open_count == 2
 
@@ -93,6 +96,27 @@ def test_sync_installed_apps_saves_every_discovered_app(memory_db):
         "Steam",
         "Spotify",
     }
+
+
+def test_sync_installed_apps_filters_technical_executables(memory_db):
+    count = sync_installed_apps(
+        {
+            "Steam": "C:\\Apps\\steam.exe",
+            "Uninstall": "C:\\Apps\\uninstall.exe",
+            "Example": "C:\\Apps\\unins000.exe",
+        }
+    )
+
+    assert count == 1
+    assert list(AppCommand.objects.values_list("name", flat=True)) == ["Steam"]
+
+
+def test_known_apps_hides_legacy_technical_executable_records(memory_db, monkeypatch):
+    register_found_app(name="Steam", path="C:\\Apps\\steam.exe")
+    register_found_app(name="Uninstall", path="C:\\Apps\\uninstall.exe")
+    monkeypatch.setattr("utils.match_app.get_list_installed_apps", lambda: {})
+
+    assert get_known_apps() == {"Steam": "C:\\Apps\\steam.exe"}
 
 
 def test_sync_installed_apps_preserves_existing_open_counts(memory_db):

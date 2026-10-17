@@ -45,7 +45,7 @@ def make_command(tmp_path, results):
     }
     command.pending_learning_candidate = None
     command.response_repository = ResponseRepository(
-        f"sqlite:///{tmp_path / 'responses.db'}"
+        f"sqlite:///{tmp_path / 'test_responses.sqlite3'}"
     )
     command.response_learner = ResponseLearner(command.response_repository)
     command.response_analyzer = QueuedAnalyzer(command.response_repository, results)
@@ -57,7 +57,6 @@ def make_command(tmp_path, results):
 
 @pytest.fixture(autouse=True)
 def increment(request):
-    # Flow tests mock register_found_app, so they must not touch the real DB.
     with patch.object(run_assistant, "increment_open_count") as mocked:
         yield mocked
 

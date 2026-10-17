@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Sequence
 
-from sqlalchemy import Float, Integer, String
+from sqlalchemy import Float, Integer, String, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -38,6 +38,7 @@ class ResponsePattern(Base):
     pattern: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     category: Mapped[str] = mapped_column(String(32), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    open_counter: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
 
     def __repr__(self) -> str:
         return f"ResponsePattern(pattern={self.pattern!r}, category={self.category!r})"

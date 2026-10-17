@@ -7,7 +7,7 @@ from django.db.models import F
 from utils.transliterate import transliterate
 from utils.categorize import guess_category
 
-from .list_apps import get_list_installed_apps
+from .list_apps import get_list_installed_apps, is_technical_app
 from core.models import AppCommand
 
 
@@ -28,7 +28,7 @@ def get_known_apps():
     for command in commands:
         path = command.path
 
-        if not path:
+        if not path or is_technical_app(command.name, path):
             continue
 
         apps[command.name] = path
@@ -37,6 +37,11 @@ def get_known_apps():
 
 def sync_installed_apps(apps: Mapping[str, str] | None = None) -> int:
     discovered_apps = apps if apps is not None else get_list_installed_apps()
+    discovered_apps = {
+        name: path
+        for name, path in discovered_apps.items()
+        if not is_technical_app(name, path)
+    }
     for name, path in discovered_apps.items():
         register_found_app(name=name, path=path)
     return len(discovered_apps)

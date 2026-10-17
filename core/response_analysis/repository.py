@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from sqlalchemy import create_engine, select
+from django.conf import settings
+from sqlalchemy import URL, create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from .config import DEFAULT_CONFIG
@@ -16,7 +17,12 @@ from .models import (
 
 
 class ResponseRepository:
-    def __init__(self, database_url: str = "sqlite:///response_patterns.db"):
+    def __init__(self, database_url: str | URL | None = None):
+        if database_url is None:
+            database_url = URL.create(
+                "sqlite",
+                database=str(settings.DATABASES["default"]["NAME"]),
+            )
         self.engine = create_engine(database_url, future=True)
         Base.metadata.create_all(self.engine)
         self.session_factory = sessionmaker(bind=self.engine, autoflush=False, autocommit=False)

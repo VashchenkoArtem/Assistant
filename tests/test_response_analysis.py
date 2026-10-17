@@ -1,4 +1,5 @@
 import pytest
+from django.test import override_settings
 from sqlalchemy import select
 
 from core.response_analysis import (
@@ -17,8 +18,25 @@ from core.response_analysis.models import ResponseConfirmation, ResponseRejectio
 
 
 def make_repository(tmp_path):
-    db_path = tmp_path / "response_patterns.db"
+    db_path = tmp_path / "test_responses.sqlite3"
     return ResponseRepository(f"sqlite:///{db_path}")
+
+
+def test_repository_default_uses_django_database(tmp_path):
+    database_path = tmp_path / "db.sqlite3"
+    with override_settings(
+        DATABASES={
+            "default": {
+                "ENGINE": "django.db.backends.sqlite3",
+                "NAME": database_path,
+            }
+        }
+    ):
+        repository = ResponseRepository()
+
+    assert repository.engine.url.database == str(database_path)
+    assert len(repository.get_all()) == 13
+    repository.engine.dispose()
 
 
 def test_normalizer_reduces_case_and_spacing():
