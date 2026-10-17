@@ -11,61 +11,6 @@ from .text_normalizer import TextNormalizer
 
 
 class DecisionEngine:
-    SHORT_CONFIRMATIONS = frozenset(
-        {
-            "так",
-            "да",
-            "д",
-            "ага",
-            "угу",
-            "добре",
-            "гаразд",
-            "звичайно",
-            "звісно",
-            "авжеж",
-            "давай",
-            "можна",
-            "нехай",
-            "правильно",
-            "точно",
-            "вірно",
-            "згоден",
-            "згодна",
-            "згодні",
-            "погоджуюсь",
-            "погоджуюся",
-            "ок",
-            "окей",
-            "okay",
-            "yes",
-            "так так",
-        }
-    )
-    SHORT_REJECTIONS = frozenset(
-        {
-            "ні",
-            "ніт",
-            "н",
-            "не",
-            "нє",
-            "неа",
-            "нет",
-            "no",
-            "не хочу",
-            "не треба",
-            "не потрібно",
-            "неправильно",
-            "не правильно",
-            "ні ні",
-            "зовсім ні",
-            "відміна",
-            "відміни",
-            "скасуй",
-            "скасувати",
-            "не можна",
-            "неможна",
-        }
-    )
     UNCERTAINTY_PHRASES = (
         "не впевнений",
         "не впевнена",
@@ -75,7 +20,7 @@ class DecisionEngine:
         "можливо",
         "мабуть",
     )
-    NEGATION_PHRASES = (SHORT_REJECTIONS - {"не"}) | {
+    NEGATION_PHRASES = {
         "та ні",
         "я передумав",
         "не зараз",
@@ -91,9 +36,6 @@ class DecisionEngine:
         "можете запускати",
         "можете запустити",
     )
-    POSITIVE_PHRASES = SHORT_CONFIRMATIONS | frozenset(
-        PERMISSION_CONFIRMATION_PHRASES
-    )
 
     def __init__(
         self,
@@ -107,21 +49,34 @@ class DecisionEngine:
         self.semantic_analyzer = semantic_analyzer or SemanticAnalyzer(repository, config)
         self.config = config or ResponseAnalysisConfig()
 
-    @staticmethod
-    def _contains_negation(text: str) -> bool:
+    def _contains_category_pattern(
+        self,
+        text: str,
+        category: ResponseCategory,
+    ) -> bool:
         lowered = TextNormalizer.normalize(text)
+        patterns = (
+            pattern.pattern
+            for pattern in self.repository.get_by_category(category)
+        )
         return any(
             re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", lowered)
-            for phrase in DecisionEngine.NEGATION_PHRASES
+            for phrase in patterns
         )
 
-    @staticmethod
-    def _contains_confirmation(text: str) -> bool:
+    def _contains_negation(self, text: str) -> bool:
         lowered = TextNormalizer.normalize(text)
         return any(
             re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", lowered)
-            for phrase in DecisionEngine.POSITIVE_PHRASES
-        )
+            for phrase in self.NEGATION_PHRASES
+        ) or self._contains_category_pattern(text, ResponseCategory.REJECTION)
+
+    def _contains_confirmation(self, text: str) -> bool:
+        lowered = TextNormalizer.normalize(text)
+        return any(
+            re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", lowered)
+            for phrase in self.PERMISSION_CONFIRMATION_PHRASES
+        ) or self._contains_category_pattern(text, ResponseCategory.CONFIRMATION)
 
     def decide(self, text: str, dialog_context: Optional[DialogContext] = None):
         normalized = TextNormalizer.normalize(text)
@@ -135,22 +90,6 @@ class DecisionEngine:
         clean_text = re.sub(r"[^\w\s]", " ", clean_text)
         clean_text = re.sub(r"\s+", " ", clean_text).strip()
 
-        if clean_text in self.SHORT_CONFIRMATIONS:
-            return ResponseAnalysis(
-                ResponseCategory.CONFIRMATION,
-                1.0,
-                clean_text,
-                ResponseSource.RULE,
-            )
-
-        if clean_text in self.SHORT_REJECTIONS:
-            return ResponseAnalysis(
-                ResponseCategory.REJECTION,
-                1.0,
-                clean_text,
-                ResponseSource.RULE,
-            )
-
         if any(phrase in normalized for phrase in self.UNCERTAINTY_PHRASES):
             return ResponseAnalysis(
                 ResponseCategory.UNKNOWN,
@@ -158,6 +97,10 @@ class DecisionEngine:
                 None,
                 ResponseSource.UNKNOWN,
             )
+
+        exact = self.pattern_matcher.match(clean_text, tuple(expected), exact_only=True)
+        if exact is not None:
+            return exact
 
         if self._contains_negation(normalized) and self._contains_confirmation(normalized):
             return ResponseAnalysis(ResponseCategory.REJECTION, 0.82, None, ResponseSource.UNKNOWN)
@@ -179,9 +122,9 @@ class DecisionEngine:
                     ResponseSource.RULE,
                 )
 
-        exact = self.pattern_matcher.match(normalized, tuple(expected))
-        if exact is not None:
-            return exact
+        matched_pattern = self.pattern_matcher.match(normalized, tuple(expected))
+        if matched_pattern is not None:
+            return matched_pattern
 
         semantic = self.semantic_analyzer.analyze(normalized, tuple(expected))
         if semantic.category != ResponseCategory.UNKNOWN:

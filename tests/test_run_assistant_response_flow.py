@@ -222,6 +222,69 @@ def test_rejecting_guessed_app_name_keeps_action_and_accepts_corrected_name(tmp_
     assert command.pending_app is None
 
 
+def test_semantic_rejection_can_be_learned_without_executing_old_app_name(tmp_path):
+    command, open_app = make_command(
+        tmp_path,
+        [
+            ResponseAnalysis(
+                ResponseCategory.REJECTION,
+                0.9,
+                source=ResponseSource.SEMANTIC,
+            ),
+            ResponseAnalysis(ResponseCategory.CONFIRMATION, 1.0),
+        ],
+    )
+
+    with (
+        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+        patch.object(run_assistant, "register_found_app") as register,
+    ):
+        command.handle_confirmation("аж ніяк")
+
+        assert command.pending_learning_candidate is not None
+        assert command.pending_learning_candidate.category == ResponseCategory.REJECTION
+        assert "як відмову" in speak.call_args.args[0]
+        open_app.assert_not_called()
+        register.assert_not_called()
+
+        command.handle_learning_confirmation("так")
+
+    assert command.response_repository.find_by_pattern("аж ніяк") is not None
+    assert command.pending_learning_candidate is None
+    assert command.pending_app["awaiting_name"] is True
+    assert "точну назву" in speak.call_args.args[0]
+    open_app.assert_not_called()
+    register.assert_not_called()
+
+
+def test_declining_semantic_rejection_learning_still_requests_corrected_name(tmp_path):
+    command, open_app = make_command(
+        tmp_path,
+        [
+            ResponseAnalysis(
+                ResponseCategory.REJECTION,
+                0.9,
+                source=ResponseSource.SEMANTIC,
+            ),
+            ResponseAnalysis(ResponseCategory.REJECTION, 1.0),
+        ],
+    )
+
+    with (
+        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+        patch.object(run_assistant, "register_found_app") as register,
+    ):
+        command.handle_confirmation("аж ніяк")
+        command.handle_learning_confirmation("ні")
+
+    assert not command.response_repository.exists("аж ніяк")
+    assert command.pending_learning_candidate is None
+    assert command.pending_app["awaiting_name"] is True
+    assert "точну назву" in speak.call_args.args[0]
+    open_app.assert_not_called()
+    register.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("spoken_verb", "is_open"),
     [

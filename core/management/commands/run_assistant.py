@@ -222,6 +222,19 @@ class Command(BaseCommand):
         )
 
         if analysis.category == ResponseCategory.REJECTION:
+            if analysis.source == ResponseSource.SEMANTIC:
+                candidate = self.response_learner.create_candidate(
+                    text=cleaned_text,
+                    category=analysis.category,
+                    confidence=analysis.confidence,
+                )
+                if candidate is not None:
+                    self.pending_learning_candidate = candidate
+                    voicing_and_printing_answer(
+                        f"Запам'ятати фразу «{candidate.text}» як відмову? Скажіть так або ні."
+                    )
+                    return
+
             pending_app["awaiting_name"] = True
             voicing_and_printing_answer(
                 "Добре, це не та програма. Назвіть її точну назву."
@@ -295,6 +308,12 @@ class Command(BaseCommand):
             voicing_and_printing_answer("Добре, не буду її запам'ятовувати.")
 
         self.pending_learning_candidate = None
+        if candidate.category == ResponseCategory.REJECTION:
+            if self.pending_app is not None:
+                self.pending_app["awaiting_name"] = True
+            voicing_and_printing_answer("Назвіть точну назву програми.")
+            return
+
         self._complete_pending_app()
 
     def _complete_pending_app(self):

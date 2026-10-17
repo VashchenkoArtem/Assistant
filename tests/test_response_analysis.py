@@ -35,7 +35,7 @@ def test_repository_default_uses_django_database(tmp_path):
         repository = ResponseRepository()
 
     assert repository.engine.url.database == str(database_path)
-    assert len(repository.get_all()) == 13
+    assert len(repository.get_all()) == 46
     repository.engine.dispose()
 
 
@@ -100,10 +100,9 @@ def test_decision_engine_recognizes_permission_as_builtin_confirmation(tmp_path)
         "точно",
         "вірно",
         "yes",
-        "д",
     ],
 )
-def test_decision_engine_recognizes_common_short_confirmations_as_rules(
+def test_decision_engine_recognizes_common_short_confirmations_from_database(
     tmp_path, answer
 ):
     engine = DecisionEngine(make_repository(tmp_path))
@@ -112,7 +111,7 @@ def test_decision_engine_recognizes_common_short_confirmations_as_rules(
 
     assert result.category == ResponseCategory.CONFIRMATION
     assert result.confidence == 1.0
-    assert result.source.value == "RULE"
+    assert result.source.value == "PATTERN"
 
 
 @pytest.mark.parametrize(
@@ -126,10 +125,9 @@ def test_decision_engine_recognizes_common_short_confirmations_as_rules(
         "неа",
         "нет",
         "no",
-        "н",
     ],
 )
-def test_decision_engine_recognizes_common_short_rejections_as_rules(
+def test_decision_engine_recognizes_common_short_rejections_from_database(
     tmp_path, answer
 ):
     engine = DecisionEngine(make_repository(tmp_path))
@@ -138,7 +136,24 @@ def test_decision_engine_recognizes_common_short_rejections_as_rules(
 
     assert result.category == ResponseCategory.REJECTION
     assert result.confidence == 1.0
-    assert result.source.value == "RULE"
+    assert result.source.value == "PATTERN"
+
+
+def test_repository_does_not_seed_single_character_responses(tmp_path):
+    repository = make_repository(tmp_path)
+    patterns = {pattern.pattern for pattern in repository.get_all()}
+
+    assert "д" not in patterns
+    assert "н" not in patterns
+
+
+def test_repository_adds_missing_defaults_to_existing_database(tmp_path):
+    repository = make_repository(tmp_path)
+    repository.delete(repository.find_by_pattern("звісно").id)
+    repository.seed_default_patterns()
+
+    assert repository.find_by_pattern("звісно") is not None
+    assert len(repository.get_all()) == 46
 
 
 def test_decision_engine_matches_short_words_at_word_boundaries(tmp_path):
