@@ -403,13 +403,11 @@ class Command(BaseCommand):
                 "is_open": is_open,
             }
             options = "; ".join(
-                f"{index}. {name} (відкривали {open_counts.get(name, 0)} разів)"
+                f"{index}. {name}"
                 for index, (name, _path) in enumerate(suggestions, start=1)
             )
-            voicing_and_printing_answer(
-                f"Точного збігу не знайшла. Схожі програми: {options}. "
-                "Назвіть номер потрібної програми або скасуйте дію."
-            )
+            self.stdout.write(f"Схожі програми: {options}")
+            run_voice("Ось програми.")
             return
 
         name, path = exact_match

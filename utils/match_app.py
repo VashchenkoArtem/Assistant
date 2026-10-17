@@ -105,14 +105,39 @@ def find_similar_apps(
         (name, path, _similarity(query, _normalize_app_name(name)))
         for name, path in apps.items()
     ]
-    similar_apps = [
-        app for app in ranked_apps if threshold <= app[2] < 1.0
+    prefix_apps = []
+    similar_apps = []
+    for app in ranked_apps:
+        if app[2] == 1.0:
+            continue
+        if _starts_with_query(query, _normalize_app_name(app[0])):
+            prefix_apps.append(app)
+        elif threshold <= app[2]:
+            similar_apps.append(app)
+
+    def sort_key(app: tuple[str, str, float]) -> tuple[int, float, str]:
+        return (
+            usage_counts.get(app[0], 0),
+            app[2],
+            app[0].casefold(),
+        )
+
+    prefix_apps.sort(key=sort_key, reverse=True)
+    similar_apps.sort(key=sort_key, reverse=True)
+    return [
+        (name, path)
+        for name, path, _score in (prefix_apps + similar_apps)[:limit]
     ]
-    similar_apps.sort(
-        key=lambda app: (usage_counts.get(app[0], 0), app[2], app[0].casefold()),
-        reverse=True,
+
+
+def _starts_with_query(query: str, app_name: str) -> bool:
+    query_variants = {query, transliterate(query)}
+    app_variants = {app_name, transliterate(app_name)}
+    return any(
+        app_variant.startswith(query_variant)
+        for query_variant in query_variants
+        for app_variant in app_variants
     )
-    return [(name, path) for name, path, _score in similar_apps[:limit]]
 
 
 def _normalize_app_query(value: str) -> str:

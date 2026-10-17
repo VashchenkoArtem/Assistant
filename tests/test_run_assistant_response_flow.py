@@ -98,9 +98,13 @@ def test_synchronous_voice_playback_marks_audio_as_busy():
         assert voicing_answer.VOICE_ACTIVE.is_set()
         assert voicing_answer.AUDIO_LOCK.locked()
 
-    with patch.object(voicing_answer, "voicing_text", side_effect=verify_voice_state):
+    with (
+        patch.object(voicing_answer, "voicing_text", side_effect=verify_voice_state),
+        patch.object(voicing_answer.time, "sleep") as sleep,
+    ):
         voicing_answer.run_voice("Говорю", wait=True)
 
+    sleep.assert_called_once_with(0.1)
     assert not voicing_answer.VOICE_ACTIVE.is_set()
 
 
@@ -567,7 +571,7 @@ def test_app_search_uses_open_count_only_after_similarity_tie(tmp_path):
     open_app.assert_called_once_with(path="C:\\Apps\\steam-alt.exe")
 
 
-def test_fuzzy_app_search_lists_suggestions_and_executes_selected_app(tmp_path):
+def test_fuzzy_app_search_lists_suggestions_without_speaking_them(tmp_path):
     command, open_app = make_command(tmp_path, [])
     command.pending_app = None
     suggestions = [
@@ -585,13 +589,16 @@ def test_fuzzy_app_search_lists_suggestions_and_executes_selected_app(tmp_path):
         patch.object(run_assistant, "find_exact_match", return_value=None),
         patch.object(run_assistant, "find_similar_apps", return_value=suggestions),
         patch.object(run_assistant, "register_found_app") as register,
-        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+        patch.object(run_assistant, "run_voice") as speak,
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+        patch.object(command.stdout, "write") as write,
     ):
         command.doing_task("відкрий Steem")
 
         assert command.pending_app is not None
         assert command.pending_app["awaiting_selection"] is True
-        assert "1. Steam Tools" in speak.call_args.args[0]
+        speak.assert_called_once_with("Ось програми.")
+        write.assert_called_once_with("Схожі програми: 1. Steam Tools; 2. Steam")
         open_app.assert_not_called()
 
         command.doing_task("2")

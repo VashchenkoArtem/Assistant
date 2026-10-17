@@ -146,3 +146,35 @@ def test_similar_apps_are_sorted_by_open_frequency(monkeypatch):
         ("Steam Deck", "C:\\Apps\\steam-deck.exe"),
         ("Steam", "C:\\Apps\\steam.exe"),
     ]
+
+
+def test_prefix_matches_are_listed_before_fuzzy_matches(monkeypatch):
+    apps = {
+        "Steam Tools": "C:\\Apps\\steam-tools.exe",
+        "Steam": "C:\\Apps\\steam.exe",
+        "Other App": "C:\\Apps\\other.exe",
+    }
+    scores = {"steam tools": 0.7, "steam": 0.8, "other app": 0.99}
+    monkeypatch.setattr(
+        match_app,
+        "_similarity",
+        lambda _query, name: scores[name],
+    )
+
+    assert find_similar_apps(
+        "ste",
+        apps,
+        open_counts={"Steam Tools": 1, "Steam": 2, "Other App": 100},
+    ) == [
+        ("Steam", "C:\\Apps\\steam.exe"),
+        ("Steam Tools", "C:\\Apps\\steam-tools.exe"),
+        ("Other App", "C:\\Apps\\other.exe"),
+    ]
+
+
+def test_prefix_matches_are_included_even_below_similarity_threshold():
+    apps = {"Notepad++": "C:\\Apps\\notepad++.exe"}
+
+    assert find_similar_apps("not", apps, threshold=0.99) == [
+        ("Notepad++", "C:\\Apps\\notepad++.exe")
+    ]
