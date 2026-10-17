@@ -50,7 +50,7 @@ def _voice_worker():
         try:
             with AUDIO_LOCK:
                 voicing_text(text)
-                time.sleep(0.3)
+                time.sleep(0.1)
         finally:
             VOICE_QUEUE.task_done()
             _mark_voice_request_finished()
@@ -128,7 +128,7 @@ def run_voice(text: str, wait: bool = False):
         try:
             with AUDIO_LOCK:
                 voicing_text(text)
-                time.sleep(0.3)
+                time.sleep(0.1)
         finally:
             _mark_voice_request_finished()
         return

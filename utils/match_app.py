@@ -7,7 +7,7 @@ from django.db.models import F
 from utils.transliterate import transliterate
 from utils.categorize import guess_category
 
-from .list_apps import get_list_installed_apps
+from .list_apps import get_list_installed_apps, is_technical_app
 from core.models import AppCommand
 
 
@@ -28,11 +28,24 @@ def get_known_apps():
     for command in commands:
         path = command.path
 
-        if not path:
+        if not path or is_technical_app(command.name, path):
             continue
 
         apps[command.name] = path
     return apps
+
+
+def sync_installed_apps(apps: Mapping[str, str] | None = None) -> int:
+    discovered_apps = apps if apps is not None else get_list_installed_apps()
+    discovered_apps = {
+        name: path
+        for name, path in discovered_apps.items()
+        if not is_technical_app(name, path)
+    }
+    for name, path in discovered_apps.items():
+        register_found_app(name=name, path=path)
+    return len(discovered_apps)
+
 
 def get_app_open_counts(app_names: Iterable[str]) -> dict[str, int]:
     counts = {}
@@ -48,6 +61,83 @@ def _normalize_app_name(value: str) -> str:
     normalized = NON_ALPHANUMERIC.sub(" ", value.lower()).strip()
     normalized = re.sub(r"\s+", " ", normalized)
     return normalized
+
+
+def find_exact_match(
+    word: str,
+    apps: Mapping[str, str],
+    open_counts: Mapping[str, int] | None = None,
+) -> tuple[str, str] | None:
+    query = _normalize_app_query(word)
+    if not query:
+        return None
+
+    query_variants = {query, transliterate(query)}
+    exact_matches = [
+        (name, path)
+        for name, path in apps.items()
+        if _normalize_app_name(name) in query_variants
+        or transliterate(_normalize_app_name(name)) in query_variants
+    ]
+    if not exact_matches:
+        return None
+
+    usage_counts = open_counts or {}
+    return max(
+        exact_matches,
+        key=lambda app: (usage_counts.get(app[0], 0), app[0].casefold()),
+    )
+
+
+def find_similar_apps(
+    word: str,
+    apps: Mapping[str, str],
+    threshold: float = THRESHOLD,
+    open_counts: Mapping[str, int] | None = None,
+    limit: int = 5,
+) -> list[tuple[str, str]]:
+    query = _normalize_app_query(word)
+    if not query:
+        return []
+
+    usage_counts = open_counts or {}
+    ranked_apps = [
+        (name, path, _similarity(query, _normalize_app_name(name)))
+        for name, path in apps.items()
+    ]
+    prefix_apps = []
+    similar_apps = []
+    for app in ranked_apps:
+        if app[2] == 1.0:
+            continue
+        if _starts_with_query(query, _normalize_app_name(app[0])):
+            prefix_apps.append(app)
+        elif threshold <= app[2]:
+            similar_apps.append(app)
+
+    def sort_key(app: tuple[str, str, float]) -> tuple[int, float, str]:
+        return (
+            usage_counts.get(app[0], 0),
+            app[2],
+            app[0].casefold(),
+        )
+
+    prefix_apps.sort(key=sort_key, reverse=True)
+    similar_apps.sort(key=sort_key, reverse=True)
+    return [
+        (name, path)
+        for name, path, _score in (prefix_apps + similar_apps)[:limit]
+    ]
+
+
+def _starts_with_query(query: str, app_name: str) -> bool:
+    query_variants = {query, transliterate(query)}
+    app_variants = {app_name, transliterate(app_name)}
+    return any(
+        app_variant.startswith(query_variant)
+        for query_variant in query_variants
+        for app_variant in app_variants
+    )
 
 
 def _normalize_app_query(value: str) -> str:

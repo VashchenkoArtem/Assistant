@@ -4,18 +4,21 @@ import re
 from utils.list_apps import get_list_installed_apps
 from django.core.management.base import BaseCommand
 import speech_recognition
-from utils.match_app import get_known_apps, get_app_open_counts, find_best_match
+from utils.match_app import (
+    find_exact_match,
+    find_similar_apps,
+    get_app_open_counts,
+    get_known_apps,
+    sync_installed_apps,
+)
 import platform, os, subprocess
-from utils.voicing_answer import run_voice, voicing_and_printing_answer, voicing_text
 from utils.match_app import increment_open_count, register_found_app, is_unknown
-from core.models import AppCommand
 from utils.voicing_answer import (
     AUDIO_LOCK,
     VOICE_ACTIVE,
     run_voice,
     voicing_and_printing_answer,
 )
-from utils.match_app import register_found_app, is_unknown
 from core.response_analysis import (
     DialogContext,
     DialogState,
@@ -45,11 +48,13 @@ class Command(BaseCommand):
         self.run = True
         self.pending_app: dict[str, Any] | None = None
         self.pending_learning_candidate: ResponseCandidate | None = None
-        self.response_repository = ResponseRepository("sqlite:///response_patterns.db")
+        self.response_repository = ResponseRepository()
         self.response_analyzer = ResponseAnalyzer(self.response_repository)
         self.response_learner = ResponseLearner(self.response_repository)
 
         self.paused = False
+        synced_apps = sync_installed_apps()
+        self.stdout.write(f"Збережено знайдені програми: {synced_apps}")
         self.stdout.write(self.style.SUCCESS(f"Асистент почав роботу"))
         recognizer = cast(Any, speech_recognition.Recognizer())
         microphone = cast(Any, speech_recognition.Microphone())
@@ -125,6 +130,9 @@ class Command(BaseCommand):
             return
 
         if self.pending_app:
+            if self.pending_app.get("awaiting_selection"):
+                self.handle_app_selection(text)
+                return
             if self.pending_app.get("awaiting_name"):
                 self.handle_app_name_correction(text)
                 return
@@ -205,7 +213,28 @@ class Command(BaseCommand):
             )
             return
 
+        self.response_repository.record_decision(
+            response=cleaned_text,
+            category=analysis.category,
+            context=question,
+            candidate=pending_app["name"],
+            confidence=analysis.confidence,
+        )
+
         if analysis.category == ResponseCategory.REJECTION:
+            if analysis.source == ResponseSource.SEMANTIC:
+                candidate = self.response_learner.create_candidate(
+                    text=cleaned_text,
+                    category=analysis.category,
+                    confidence=analysis.confidence,
+                )
+                if candidate is not None:
+                    self.pending_learning_candidate = candidate
+                    voicing_and_printing_answer(
+                        f"Запам'ятати фразу «{candidate.text}» як відмову? Скажіть так або ні."
+                    )
+                    return
+
             pending_app["awaiting_name"] = True
             voicing_and_printing_answer(
                 "Добре, це не та програма. Назвіть її точну назву."
@@ -264,6 +293,13 @@ class Command(BaseCommand):
             )
             return
 
+        self.response_repository.record_decision(
+            response=text,
+            category=analysis.category,
+            context=question,
+            candidate=candidate.text,
+            confidence=analysis.confidence,
+        )
         if analysis.category == ResponseCategory.CONFIRMATION:
             self.response_learner.accept_candidate(candidate)
             voicing_and_printing_answer(f"Запам'ятала фразу «{candidate.text}».")
@@ -272,6 +308,12 @@ class Command(BaseCommand):
             voicing_and_printing_answer("Добре, не буду її запам'ятовувати.")
 
         self.pending_learning_candidate = None
+        if candidate.category == ResponseCategory.REJECTION:
+            if self.pending_app is not None:
+                self.pending_app["awaiting_name"] = True
+            voicing_and_printing_answer("Назвіть точну назву програми.")
+            return
+
         self._complete_pending_app()
 
     def _complete_pending_app(self):
@@ -336,22 +378,39 @@ class Command(BaseCommand):
         voicing_and_printing_answer("Починаю шукати програму...")
         apps = get_known_apps()
         open_counts = get_app_open_counts(apps.keys())
-        match_result = find_best_match(
+        exact_match = find_exact_match(
             word=target_word,
             apps=apps,
-            threshold=0.45,
             open_counts=open_counts,
         )
 
-        if match_result is None:
-            voicing_and_printing_answer(f"Я не знайшла програму схожу на {target_word}")
+        if exact_match is None:
+            suggestions = find_similar_apps(
+                word=target_word,
+                apps=apps,
+                threshold=0.45,
+                open_counts=open_counts,
+            )
+            if not suggestions:
+                voicing_and_printing_answer(
+                    f"Я не знайшла програму схожу на {target_word}"
+                )
+                return
+
+            self.pending_app = {
+                "awaiting_selection": True,
+                "suggestions": suggestions,
+                "is_open": is_open,
+            }
+            options = "; ".join(
+                f"{index}. {name}"
+                for index, (name, _path) in enumerate(suggestions, start=1)
+            )
+            self.stdout.write(f"Схожі програми: {options}")
+            run_voice("Ось програми.")
             return
 
-        name, path = match_result
-
-        if not name or not path:
-            voicing_and_printing_answer(f"Я не знайшла програму схожу на {target_word}")
-            return
+        name, path = exact_match
 
         is_unknown_app = is_unknown(name=name, path=path)
 
@@ -365,9 +424,62 @@ class Command(BaseCommand):
             return
 
         voicing_and_printing_answer(f"Знайшла програму {name}")
+        self.execute_app_action(name, path, is_open)
 
+    def handle_app_selection(self, text: str) -> None:
+        pending_app = self.pending_app
+        if pending_app is None:
+            return
+
+        suggestions = pending_app["suggestions"]
+        normalized_text = re.sub(r"[^\w\s]", "", text.lower()).strip()
+        ordinal_indices = {
+            "перший": 0,
+            "перша": 0,
+            "перше": 0,
+            "другий": 1,
+            "друга": 1,
+            "друге": 1,
+            "третій": 2,
+            "третя": 2,
+            "третє": 2,
+            "четвертий": 3,
+            "четверта": 3,
+            "четверте": 3,
+            "пятий": 4,
+            "пята": 4,
+            "пяте": 4,
+            "п'ятий": 4,
+            "п'ята": 4,
+            "п'яте": 4,
+        }
+        selected_index = ordinal_indices.get(normalized_text)
+        if selected_index is None and normalized_text.isdigit():
+            selected_index = int(normalized_text) - 1
+
+        if selected_index is not None and 0 <= selected_index < len(suggestions):
+            name, path = suggestions[selected_index]
+        else:
+            exact_match = find_exact_match(
+                text,
+                dict(suggestions),
+                get_app_open_counts(name for name, _path in suggestions),
+            )
+            if exact_match is None:
+                voicing_and_printing_answer(
+                    "Не розпізнала вибір. Назвіть номер однієї з програм у списку "
+                    "або скасуйте дію."
+                )
+                return
+            name, path = exact_match
+
+        is_open = pending_app["is_open"]
+        self.pending_app = None
+        voicing_and_printing_answer(f"Вибрано програму {name}.")
+        self.execute_app_action(name, path, is_open)
+
+    def execute_app_action(self, name: str, path: str, is_open: bool) -> None:
         command = register_found_app(name=name, path=path)
-
         if is_open:
             voicing_and_printing_answer(f"Відкриваю {name}")
             if self.open_app(path=path):

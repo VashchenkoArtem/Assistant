@@ -97,3 +97,24 @@ def test_user_local_programs_are_discovered_with_executable_extension(
 
     assert apps["Cursor"] == str(cursor_executable)
     assert find_best_match("курсор", apps) == ("Cursor", str(cursor_executable))
+
+
+def test_technical_executables_are_not_discovered(tmp_path, monkeypatch):
+    program_dir = tmp_path / "Programs" / "Example"
+    program_dir.mkdir(parents=True)
+    (program_dir / "Example.exe").touch()
+    (program_dir / "unins000.exe").touch()
+    (program_dir / "Uninstall.exe").touch()
+    (program_dir / "Update.exe").touch()
+
+    monkeypatch.setattr("utils.list_apps.platform.system", lambda: "Windows")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("PROGRAMFILES", "")
+    monkeypatch.setenv("PROGRAMFILES(X86)", "")
+    monkeypatch.setenv("APPDATA", "")
+    monkeypatch.setenv("PROGRAMDATA", "")
+
+    with patch("utils.list_apps._get_windows_store_apps", return_value={}):
+        apps = get_list_installed_apps()
+
+    assert apps == {"Example": str(program_dir / "Example.exe")}
