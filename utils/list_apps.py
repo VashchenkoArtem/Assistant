@@ -2,6 +2,7 @@ import json
 import os
 import platform
 import subprocess
+from functools import lru_cache
 
 
 def _get_windows_store_apps():
@@ -77,7 +78,8 @@ def search_dirs_and_extentions():
     return valid_dirs, extensions
 
 
-    
+    # Добавил кэширование списка приложений(по совету ии), поэтому теперь сканирование диска происходит только один раз, а все последующие запросы списка работают мгновенно
+@lru_cache(maxsize=1)
 def get_list_installed_apps():
     installed_apps = {}
 

@@ -146,8 +146,9 @@ class Command(BaseCommand):
             voicing_and_printing_answer("Привіт, рада тебе бачити!")
             return
 
+        # Убрал озвучивание
         if "додатки" in lowered:
-            voicing_and_printing_answer("Відкриваю список додатків...")
+            self.stdout.write("Отримую список додатків...")
             apps = get_list_installed_apps()
             self.stdout.write(f"Встановлені додатки: {', '.join(apps.keys())}")
             return
