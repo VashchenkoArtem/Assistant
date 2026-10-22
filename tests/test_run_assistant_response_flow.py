@@ -1,6 +1,6 @@
 import os
 from collections.abc import Iterable
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 import pytest
 from sqlalchemy import select
 
@@ -80,20 +80,57 @@ def test_recognizer_is_calibrated_and_keeps_short_phrases():
     assert recognizer.non_speaking_duration == 0.5
 
 
-def test_listener_does_not_record_while_assistant_is_speaking():
+def test_listener_records_while_assistant_is_speaking():
     recognizer = Mock()
+    recognizer.listen.return_value = "user audio"
     voicing_answer.VOICE_ACTIVE.set()
     try:
         audio = Command.listen_for_audio(recognizer, source=object())
     finally:
         voicing_answer.VOICE_ACTIVE.clear()
 
-    assert audio is None
-    recognizer.listen.assert_not_called()
+    assert audio == "user audio"
+    recognizer.listen.assert_called_once()
+
+
+def test_interrupt_voice_stops_playback_and_invalidates_queued_speech():
+    with voicing_answer.VOICE_STATE_LOCK:
+        generation_before = voicing_answer._voice_generation
+
+    with (
+        patch.object(voicing_answer.pygame.mixer, "get_init", return_value=True),
+        patch.object(voicing_answer.pygame.mixer, "stop") as stop_playback,
+    ):
+        voicing_answer.interrupt_voice()
+
+    with voicing_answer.VOICE_STATE_LOCK:
+        assert voicing_answer._voice_generation == generation_before + 1
+    stop_playback.assert_called_once_with()
+
+
+def test_recognized_command_interrupts_speech_before_command_execution(tmp_path):
+    command, _open_app = make_command(tmp_path, [])
+    command.stdout = Mock()
+    command.paused = False
+    call_order = Mock()
+    with (
+        patch.object(run_assistant, "VOICE_ACTIVE") as voice_active,
+        patch.object(run_assistant, "interrupt_voice") as interrupt,
+        patch.object(command, "doing_task", side_effect=lambda text: call_order.command(text)),
+    ):
+        voice_active.is_set.return_value = True
+        interrupt.side_effect = lambda: call_order.interrupt()
+
+        command.process_recognized_command("відкрий папку Музика")
+
+    assert call_order.mock_calls == [
+        call.interrupt(),
+        call.command("відкрий папку Музика"),
+    ]
 
 
 def test_synchronous_voice_playback_marks_audio_as_busy():
-    def verify_voice_state(text):
+    def verify_voice_state(text, _generation):
         assert text == "Говорю"
         assert voicing_answer.VOICE_ACTIVE.is_set()
         assert voicing_answer.AUDIO_LOCK.locked()
@@ -145,6 +182,101 @@ def test_user_can_cancel_pending_app_after_confirmation_reprompt(tmp_path):
     assert command.pending_learning_candidate is None
     open_app.assert_not_called()
     register.assert_not_called()
+    assert "скасувала відкриття" in speak.call_args.args[0]
+
+
+@pytest.mark.parametrize(
+    "spoken_command",
+    [
+        "продовж",
+        "продовжуй",
+        "віднови",
+    ],
+)
+def test_paused_assistant_can_be_resumed_with_voice_command(tmp_path, spoken_command):
+    command, _open_app = make_command(tmp_path, [])
+    command.paused = True
+
+    with patch.object(command, "resume_assistant") as resume:
+        command.handle_paused_command(spoken_command)
+
+    resume.assert_called_once_with()
+
+
+def test_paused_assistant_does_not_echo_recognized_words(tmp_path):
+    command, _open_app = make_command(tmp_path, [])
+    command.paused = True
+    command.stdout = Mock()
+
+    command.report_recognized_command("працює не працює пауза")
+
+    command.stdout.write.assert_not_called()
+
+
+def test_assistant_still_echoes_commands_before_pausing(tmp_path):
+    command, _open_app = make_command(tmp_path, [])
+    command.paused = False
+    command.stdout = Mock()
+
+    command.report_recognized_command("пауза")
+
+    command.stdout.write.assert_called_once_with("Ви сказали: пауза")
+
+
+def test_paused_assistant_ignores_regular_commands(tmp_path):
+    command, _open_app = make_command(tmp_path, [])
+    command.paused = True
+
+    with (
+        patch.object(command, "resume_assistant") as resume,
+        patch.object(command, "stop_assistant") as stop,
+    ):
+        command.handle_paused_command("відкрий провідник")
+
+    resume.assert_not_called()
+    stop.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("text", "option_count", "expected_index"),
+    [
+        ("варіант 1", 5, 0),
+        ("обираю номер 2", 5, 1),
+        ("думаю, що підійде 3", 5, 2),
+        ("другий", 5, 1),
+        ("номер чотири", 5, 3),
+        ("варіант 8 або 2", 5, 1),
+        ("перший чи другий", 5, None),
+        ("варіант 7", 2, None),
+    ],
+)
+def test_selection_parser_finds_numbers_anywhere_in_response(
+    text,
+    option_count,
+    expected_index,
+):
+    assert Command.find_selection_index(text, option_count) == expected_index
+
+
+def test_unrecognized_audio_prompts_once_and_waits_until_cancelled(tmp_path):
+    command, open_app = make_command(tmp_path, [])
+    command.stdout = Mock()
+
+    with patch.object(run_assistant, "voicing_and_printing_answer") as speak:
+        for _ in range(10):
+            command.handle_unrecognized_audio()
+
+        assert command.pending_app is not None
+        command.stdout.write.assert_called_once_with(
+            "Не розібрав звук. Повторіть відповідь або скажіть «скасувати»."
+        )
+        assert command.unrecognized_audio_prompted is True
+
+        command.doing_task("скасувати")
+
+    assert command.pending_app is None
+    assert command.pending_learning_candidate is None
+    open_app.assert_not_called()
     assert "скасувала відкриття" in speak.call_args.args[0]
 
 
@@ -601,7 +733,19 @@ def test_fuzzy_app_search_lists_suggestions_without_speaking_them(tmp_path):
         write.assert_called_once_with("Схожі програми: 1. Steam Tools; 2. Steam")
         open_app.assert_not_called()
 
-        command.doing_task("2")
+        command.doing_task("я обираю номер два")
+
+        assert command.pending_app["awaiting_selection_confirmation"] is True
+        open_app.assert_not_called()
+
+        command.analyze_response = Mock(
+            return_value=ResponseAnalysis(
+                ResponseCategory.CONFIRMATION,
+                1.0,
+                source=ResponseSource.PATTERN,
+            )
+        )
+        command.doing_task("так")
 
     open_app.assert_called_once_with(path="C:\\Apps\\steam.exe")
     register.assert_called_once_with(
@@ -609,6 +753,29 @@ def test_fuzzy_app_search_lists_suggestions_without_speaking_them(tmp_path):
         path="C:\\Apps\\steam.exe",
     )
     assert command.pending_app is None
+
+
+def test_out_of_range_app_number_is_ignored_and_selection_reprompted(tmp_path):
+    command, open_app = make_command(tmp_path, [])
+    command.pending_app = {
+        "awaiting_selection": True,
+        "suggestions": [
+            ("Steam", "C:\\Apps\\steam.exe"),
+            ("Steam Tools", "C:\\Apps\\steam-tools.exe"),
+        ],
+        "is_open": True,
+    }
+
+    with (
+        patch.object(run_assistant, "find_exact_match", return_value=None),
+        patch.object(run_assistant, "get_app_open_counts", return_value={}),
+        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+    ):
+        command.doing_task("варіант 7")
+
+    assert command.pending_app["awaiting_selection"] is True
+    assert "Не розпізнала вибір" in speak.call_args.args[0]
+    open_app.assert_not_called()
 
 
 def test_closing_app_does_not_increment_open_count(tmp_path, increment):
