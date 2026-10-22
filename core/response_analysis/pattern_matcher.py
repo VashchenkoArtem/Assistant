@@ -13,7 +13,12 @@ class PatternMatcher:
         self.repository = repository
         self.config = config or ResponseAnalysisConfig()
 
-    def match(self, text: str, expected_categories: Optional[tuple[ResponseCategory, ...]] = None):
+    def match(
+        self,
+        text: str,
+        expected_categories: Optional[tuple[ResponseCategory, ...]] = None,
+        exact_only: bool = False,
+    ):
         normalized = TextNormalizer.normalize(text)
         if not normalized:
             return None
@@ -39,6 +44,9 @@ class PatternMatcher:
                 if score > best_score:
                     best_match = pattern
                     best_score = score
+                continue
+
+            if exact_only:
                 continue
 
             if candidate_text in normalized or normalized in candidate_text:

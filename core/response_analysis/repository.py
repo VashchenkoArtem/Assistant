@@ -2,15 +2,27 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from sqlalchemy import create_engine, select
+from django.conf import settings
+from sqlalchemy import URL, create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from .config import DEFAULT_CONFIG
-from .models import Base, ResponseCategory, ResponsePattern
+from .models import (
+    Base,
+    ResponseCategory,
+    ResponseConfirmation,
+    ResponsePattern,
+    ResponseRejection,
+)
 
 
 class ResponseRepository:
-    def __init__(self, database_url: str = "sqlite:///response_patterns.db"):
+    def __init__(self, database_url: str | URL | None = None):
+        if database_url is None:
+            database_url = URL.create(
+                "sqlite",
+                database=str(settings.DATABASES["default"]["NAME"]),
+            )
         self.engine = create_engine(database_url, future=True)
         Base.metadata.create_all(self.engine)
         self.session_factory = sessionmaker(bind=self.engine, autoflush=False, autocommit=False)
@@ -18,29 +30,68 @@ class ResponseRepository:
 
     def seed_default_patterns(self) -> None:
         with self.session_factory() as session:
-            existing = session.execute(select(ResponsePattern)).scalars().all()
-            if existing:
-                return
-
             defaults = [
                 ("так", ResponseCategory.CONFIRMATION, 1.0),
+                ("да", ResponseCategory.CONFIRMATION, 1.0),
                 ("ага", ResponseCategory.CONFIRMATION, 1.0),
                 ("угу", ResponseCategory.CONFIRMATION, 1.0),
                 ("добре", ResponseCategory.CONFIRMATION, 1.0),
+                ("гаразд", ResponseCategory.CONFIRMATION, 1.0),
                 ("звичайно", ResponseCategory.CONFIRMATION, 1.0),
+                ("звісно", ResponseCategory.CONFIRMATION, 1.0),
+                ("авжеж", ResponseCategory.CONFIRMATION, 1.0),
                 ("давай", ResponseCategory.CONFIRMATION, 1.0),
                 ("можна", ResponseCategory.CONFIRMATION, 1.0),
-                
+                ("нехай", ResponseCategory.CONFIRMATION, 1.0),
+                ("правильно", ResponseCategory.CONFIRMATION, 1.0),
+                ("точно", ResponseCategory.CONFIRMATION, 1.0),
+                ("вірно", ResponseCategory.CONFIRMATION, 1.0),
+                ("згоден", ResponseCategory.CONFIRMATION, 1.0),
+                ("згодна", ResponseCategory.CONFIRMATION, 1.0),
+                ("згодні", ResponseCategory.CONFIRMATION, 1.0),
+                ("погоджуюсь", ResponseCategory.CONFIRMATION, 1.0),
+                ("погоджуюся", ResponseCategory.CONFIRMATION, 1.0),
+                ("ок", ResponseCategory.CONFIRMATION, 1.0),
+                ("окей", ResponseCategory.CONFIRMATION, 1.0),
+                ("okay", ResponseCategory.CONFIRMATION, 1.0),
+                ("yes", ResponseCategory.CONFIRMATION, 1.0),
+                ("так так", ResponseCategory.CONFIRMATION, 1.0),
+
                 ("ні", ResponseCategory.REJECTION, 1.0),
+                ("ніт", ResponseCategory.REJECTION, 1.0),
+                ("не", ResponseCategory.REJECTION, 1.0),
+                ("нє", ResponseCategory.REJECTION, 1.0),
+                ("неа", ResponseCategory.REJECTION, 1.0),
+                ("нет", ResponseCategory.REJECTION, 1.0),
+                ("no", ResponseCategory.REJECTION, 1.0),
                 ("не хочу", ResponseCategory.REJECTION, 1.0),
                 ("не треба", ResponseCategory.REJECTION, 1.0),
                 ("не потрібно", ResponseCategory.REJECTION, 1.0),
+                ("неправильно", ResponseCategory.REJECTION, 1.0),
+                ("не правильно", ResponseCategory.REJECTION, 1.0),
+                ("ні ні", ResponseCategory.REJECTION, 1.0),
+                ("зовсім ні", ResponseCategory.REJECTION, 1.0),
+                ("відміна", ResponseCategory.REJECTION, 1.0),
+                ("відміни", ResponseCategory.REJECTION, 1.0),
                 ("скасуй", ResponseCategory.REJECTION, 1.0),
+                ("скасувати", ResponseCategory.REJECTION, 1.0),
+                ("не можна", ResponseCategory.REJECTION, 1.0),
+                ("неможна", ResponseCategory.REJECTION, 1.0),
                 ("я передумав", ResponseCategory.REJECTION, 1.0),
             ]
 
+            existing_patterns = set(
+                session.execute(select(ResponsePattern.pattern)).scalars().all()
+            )
             for pattern_text, category, confidence in defaults:
-                session.add(ResponsePattern(pattern=pattern_text, category=category.value, confidence=confidence))
+                if pattern_text not in existing_patterns:
+                    session.add(
+                        ResponsePattern(
+                            pattern=pattern_text,
+                            category=category.value,
+                            confidence=confidence,
+                        )
+                    )
 
             session.commit()
 
@@ -60,6 +111,36 @@ class ResponseRepository:
             if self.exists(normalized_pattern):
                 raise ValueError(f"Pattern '{normalized_pattern}' already exists.")
             item = ResponsePattern(pattern=normalized_pattern, category=category.value, confidence=confidence)
+            session.add(item)
+            session.commit()
+            session.refresh(item)
+            return item
+
+    def record_decision(
+        self,
+        response: str,
+        category: ResponseCategory,
+        context: str = "",
+        candidate: str = "",
+        confidence: float = 1.0,
+    ) -> ResponseConfirmation | ResponseRejection:
+        response = response.strip()
+        if not response:
+            raise ValueError("Response cannot be empty.")
+        if category == ResponseCategory.CONFIRMATION:
+            decision_type = ResponseConfirmation
+        elif category == ResponseCategory.REJECTION:
+            decision_type = ResponseRejection
+        else:
+            raise ValueError("Only confirmations and rejections can be recorded.")
+
+        with self.session_factory() as session:
+            item = decision_type(
+                response=response,
+                context=context,
+                candidate=candidate,
+                confidence=confidence,
+            )
             session.add(item)
             session.commit()
             session.refresh(item)

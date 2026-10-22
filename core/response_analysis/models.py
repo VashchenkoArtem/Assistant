@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Sequence
 
-from sqlalchemy import Float, Integer, String
+from sqlalchemy import Float, Integer, String, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -38,9 +38,30 @@ class ResponsePattern(Base):
     pattern: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     category: Mapped[str] = mapped_column(String(32), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    open_counter: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
 
     def __repr__(self) -> str:
         return f"ResponsePattern(pattern={self.pattern!r}, category={self.category!r})"
+
+
+class ResponseConfirmation(Base):
+    __tablename__ = "response_confirmations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    response: Mapped[str] = mapped_column(String(255), nullable=False)
+    context: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    candidate: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+
+
+class ResponseRejection(Base):
+    __tablename__ = "response_rejections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    response: Mapped[str] = mapped_column(String(255), nullable=False)
+    context: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    candidate: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
 
 
 @dataclass
