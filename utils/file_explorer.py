@@ -22,6 +22,11 @@ NEW_WINDOW_PHRASE = re.compile(
     r"\b(?:у|в)\s+(?:новому|окремому)\s+вікні\b",
     re.IGNORECASE,
 )
+CURRENT_FOLDER_PHRASE = re.compile(
+    r"\b(?:у|в)\s+(?:(?:цій|поточній)\s+папці|"
+    r"(?:цьому|поточному)\s+(?:каталозі|директорії))\b",
+    re.IGNORECASE,
+)
 LOCATION_ALIASES = {
     "робочий стіл": "Desktop",
     "робочого столу": "Desktop",
@@ -52,9 +57,15 @@ LOCATION_ALIASES = {
     "this pc": "shell:MyComputerFolder",
     "кошик": "shell:RecycleBinFolder",
     "recycle bin": "shell:RecycleBinFolder",
+    "провід": "explorer",
     "провідник": "explorer",
     "file explorer": "explorer",
     "explorer": "explorer",
+    "налаштування": "ms-settings:",
+    "налаштування windows": "ms-settings:",
+    "параметри": "ms-settings:",
+    "параметри windows": "ms-settings:",
+    "settings": "ms-settings:",
 }
 SEARCH_FOLDER_NAMES = ("Desktop", "Documents", "Downloads", "Pictures", "Music", "Videos")
 MAX_SEARCH_DEPTH = 4
@@ -73,6 +84,10 @@ def _clean_target(value: str) -> str:
     return value.strip().strip("\"'«»").rstrip(" \t.,!?;:")
 
 
+def is_current_folder_request(text: str) -> bool:
+    return CURRENT_FOLDER_PHRASE.search(text) is not None
+
+
 def parse_open_target_command(text: str) -> tuple[str, str, bool] | None:
     verb_match = OPEN_VERB.search(text)
     if verb_match is None:
@@ -81,6 +96,7 @@ def parse_open_target_command(text: str) -> tuple[str, str, bool] | None:
     target = _clean_target(text[verb_match.end():])
     new_window = bool(NEW_WINDOW_PHRASE.search(target))
     target = _clean_target(NEW_WINDOW_PHRASE.sub("", target))
+    target = _clean_target(CURRENT_FOLDER_PHRASE.sub("", target))
     kind_match = TARGET_KIND.match(target)
     if kind_match is not None:
         kind = "file" if kind_match.group("kind").lower().startswith(
@@ -166,6 +182,8 @@ def find_file_targets(
         return []
 
     alias = LOCATION_ALIASES.get(re.sub(r"\s+", " ", cleaned_target.lower()))
+    if alias == "ms-settings:":
+        return [alias] if platform.system() == "Windows" else []
     if alias == "explorer":
         return [alias] if expected_kind != "file" else []
     if alias == "shell:MyComputerFolder" or alias == "shell:RecycleBinFolder":
@@ -212,6 +230,28 @@ def find_file_targets(
                 if len(found) >= MAX_RESULTS:
                     return found
     return found
+
+
+def find_file_targets_in_folder(target: str, folder: str) -> list[str]:
+    cleaned_target = _clean_target(target)
+    if not cleaned_target or not os.path.isdir(folder):
+        return []
+
+    target_name = os.path.basename(cleaned_target.rstrip("\\/"))
+    if not target_name:
+        return []
+
+    with os.scandir(folder) as entries:
+        matches = sorted(
+            (
+                entry.path
+                for entry in entries
+                if entry.is_file(follow_symlinks=False)
+                and _matches_target_name(entry.path, target_name)
+            ),
+            key=str.casefold,
+        )
+    return matches[:MAX_RESULTS]
 
 
 def find_similar_file_targets(
@@ -285,6 +325,12 @@ def find_similar_file_targets(
 
 
 def open_target(path: str, new_window: bool = False) -> None:
+    if path == "ms-settings:":
+        if platform.system() != "Windows":
+            raise NotImplementedError("Налаштування Windows доступні лише у Windows")
+        os.startfile(path)
+        return
+
     if path == "explorer":
         if platform.system() == "Windows":
             args = ["explorer.exe"]
@@ -468,7 +514,7 @@ def open_folder_in_new_window(path: str) -> None:
     if platform.system() != "Windows":
         open_target(path)
         return
-    subprocess.Popen(["explorer.exe", "/n", path])
+    subprocess.Popen(["explorer.exe", "/n,", "/e,", os.path.abspath(path)])
 
 
 def _run_explorer_script(script: str) -> str:
