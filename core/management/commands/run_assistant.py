@@ -24,8 +24,11 @@ from utils.file_explorer import (
     close_explorer_windows,
     find_open_explorer_folders,
     find_file_targets,
+    find_file_targets_in_folder,
     find_similar_file_targets,
+    get_active_explorer_path,
     get_active_explorer_subfolders,
+    is_current_folder_request,
     navigate_explorer_back,
     navigate_explorer_to,
     open_target,
@@ -68,7 +71,8 @@ NAVIGATE_BACK_PATTERN = re.compile(
 )
 NAVIGATE_FORWARD_PATTERN = re.compile(
     r"\b(?:вперед(?:\s+(?:у|в)\s+провіднику|\s+по\s+папках)?|"
-    r"перейти\s+вперед\s+по\s+папках|далі\s+по\s+папках)\b",
+    r"перейти\s+вперед\s+по\s+папках|"
+    r"далі(?:\s+(?:у|в)\s+провіднику|\s+по\s+папках)?)\b",
     re.IGNORECASE,
 )
 GENERIC_APP_PREFIX = re.compile(
@@ -143,9 +147,9 @@ class Command(BaseCommand):
     def configure_recognizer(recognizer: Any, source: Any) -> None:
         recognizer.dynamic_energy_threshold = True
         recognizer.adjust_for_ambient_noise(source, duration=1)
-        recognizer.phrase_threshold = 0.15
-        recognizer.pause_threshold = 0.8
-        recognizer.non_speaking_duration = 0.5
+        recognizer.phrase_threshold = 0.05
+        recognizer.pause_threshold = 0.6
+        recognizer.non_speaking_duration = 0.25
 
     @staticmethod
     def listen_for_audio(recognizer: Any, source: Any):
@@ -207,6 +211,7 @@ class Command(BaseCommand):
                     pending_file["kind"],
                     text,
                     new_window=pending_file.get("new_window", False),
+                    current_folder=pending_file.get("current_folder", False),
                 )
                 return
             if pending_file.get("awaiting_explorer_folder_name"):
@@ -257,7 +262,14 @@ class Command(BaseCommand):
         target_command = parse_open_target_command(text)
         if target_command is not None:
             kind, target, new_window = target_command
-            self.handle_file_open(kind, target, new_window=new_window)
+            self.handle_file_open(
+                kind,
+                target,
+                new_window=new_window,
+                current_folder=(
+                    kind == "file" and is_current_folder_request(text)
+                ),
+            )
             return
 
         if APP_COMMAND_PATTERN.search(lowered):
@@ -415,8 +427,15 @@ class Command(BaseCommand):
             return
 
         corrected_name = text.strip()
+        command_match = APP_COMMAND_PATTERN.match(corrected_name)
+        if command_match is not None:
+            corrected_name = corrected_name[command_match.end():].strip()
+        corrected_name = GENERIC_APP_PREFIX.sub("", corrected_name).strip()
         if not corrected_name:
-            voicing_and_printing_answer("Назвіть точну назву програми.")
+            action = "відкрити" if pending_app["is_open"] else "закрити"
+            voicing_and_printing_answer(
+                f"Яку програму {action}? Назвіть її назву."
+            )
             return
 
         is_open = pending_app["is_open"]
@@ -478,10 +497,7 @@ class Command(BaseCommand):
             if self.open_app(pending_app["path"]):
                 increment_open_count(command)
         else:
-            app_path = pending_app["path"]
-            self.close_app(
-                app_path if app_path.startswith("appx://") else os.path.basename(app_path)
-            )
+            self.close_app(app_name=pending_app["path"])
 
         self.pending_app = None
 
@@ -510,20 +526,45 @@ class Command(BaseCommand):
         kind: str,
         target: str,
         new_window: bool = False,
+        current_folder: bool = False,
     ) -> None:
         if not target.strip():
             self.pending_file = {
                 "kind": kind,
                 "awaiting_target": True,
                 "new_window": new_window,
+                "current_folder": current_folder,
             }
             label = "файл" if kind == "file" else "папку"
             voicing_and_printing_answer(f"Який {label} відкрити? Назвіть його.")
             return
 
-        targets = find_file_targets(target, expected_kind=kind)
+        folder = None
+        if current_folder:
+            try:
+                folder = get_active_explorer_path()
+                if folder is None or not os.path.isdir(folder):
+                    voicing_and_printing_answer(
+                        "Відкрийте потрібну папку у Провіднику й повторіть команду."
+                    )
+                    return
+                targets = find_file_targets_in_folder(target, folder)
+            except (OSError, RuntimeError, NotImplementedError) as error:
+                self.stdout.write(
+                    self.style.WARNING(f"Помилка читання поточної папки: {error}")
+                )
+                voicing_and_printing_answer(
+                    "Не вдалося визначити поточну папку Провідника."
+                )
+                return
+        else:
+            targets = find_file_targets(target, expected_kind=kind)
         if not targets:
-            suggestions = find_similar_file_targets(target, expected_kind=kind)
+            suggestions = (
+                find_similar_file_targets(target, roots=[folder], expected_kind=kind)
+                if current_folder
+                else find_similar_file_targets(target, expected_kind=kind)
+            )
             if suggestions:
                 self.pending_file = {
                     "awaiting_selection": True,
@@ -534,10 +575,16 @@ class Command(BaseCommand):
                 return
 
             label = "файл" if kind == "file" else "папку"
-            voicing_and_printing_answer(
-                f"Не знайшла {label} «{target}» у стандартних папках. "
-                "Скажіть повний шлях або назвіть інший елемент."
-            )
+            if current_folder:
+                voicing_and_printing_answer(
+                    f"Не знайшла {label} «{target}» у поточній папці. "
+                    "Назвіть інший файл або скажіть повний шлях."
+                )
+            else:
+                voicing_and_printing_answer(
+                    f"Не знайшла {label} «{target}» у стандартних папках. "
+                    "Скажіть повний шлях або назвіть інший елемент."
+                )
             return
 
         if len(targets) > 1:
@@ -636,7 +683,13 @@ class Command(BaseCommand):
         return valid_indices.pop()
 
     def open_file_target(self, path: str, new_window: bool = False) -> None:
-        label = "Провідник" if path == "explorer" else os.path.basename(path) or path
+        label = (
+            "Провідник"
+            if path == "explorer"
+            else "Налаштування Windows"
+            if path == "ms-settings:"
+            else os.path.basename(path) or path
+        )
         try:
             if new_window:
                 open_target(path, new_window=True)
@@ -768,15 +821,32 @@ class Command(BaseCommand):
                 return
 
         if len(folders) > 7:
-            voicing_and_printing_answer(
-                "У цій папці більше семи підпапок. Назвіть конкретну папку."
-            )
+            if requested_name:
+                voicing_and_printing_answer(
+                    f"Не знайшла папку «{requested_name}». "
+                    "У цій папці більше семи підпапок. Повторіть точну назву."
+                )
+            else:
+                voicing_and_printing_answer(
+                    "У цій папці більше семи підпапок. Назвіть конкретну папку."
+                )
         else:
-            names = "; ".join(self._explorer_folder_name(path) for path in folders)
-            self.stdout.write(f"Підпапки: {names}")
-            voicing_and_printing_answer(
-                "Підпапки виведено на екран. Назвіть папку, до якої перейти."
+            names = "; ".join(
+                f"{index}. {self._explorer_folder_name(path)}"
+                for index, path in enumerate(folders, start=1)
             )
+            self.stdout.write(f"Підпапки: {names}")
+            if requested_name:
+                voicing_and_printing_answer(
+                    f"Не знайшла папку «{requested_name}». "
+                    "Список показано на екрані. Назвіть номер потрібної папки "
+                    "або повторіть її назву."
+                )
+            else:
+                voicing_and_printing_answer(
+                    "Підпапки виведено на екран. Назвіть назву папки "
+                    "або її номер у списку."
+                )
 
         self.pending_file = {
             "awaiting_explorer_folder_name": True,
@@ -788,9 +858,12 @@ class Command(BaseCommand):
         if pending_file is None:
             return
 
-        match = self._match_explorer_folder_name(
-            text,
-            pending_file["targets"],
+        targets = pending_file["targets"]
+        selected_index = self.find_selection_index(text, len(targets))
+        match = (
+            targets[selected_index]
+            if selected_index is not None
+            else self._match_explorer_folder_name(text, targets)
         )
         if match is None:
             return
@@ -1018,9 +1091,7 @@ class Command(BaseCommand):
                 increment_open_count(command)
         else:
             voicing_and_printing_answer(f"Закриваю {name}")
-            self.close_app(
-                app_name=path if path.startswith("appx://") else os.path.basename(path)
-            )
+            self.close_app(app_name=path)
 
     def open_app(self, path) -> bool:
         try:
@@ -1082,17 +1153,60 @@ class Command(BaseCommand):
                         self.style.WARNING(f"Не вдалося закрити Store-програму: {message}")
                     )
                 return
-            else:
-                app_name = os.path.basename(app_name)
+
+            if system == "Windows" and app_name.casefold().endswith(".lnk"):
+                result = subprocess.run(
+                    args=[
+                        "powershell",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        (
+                            "$shell = New-Object -ComObject WScript.Shell; "
+                            "$shortcut = $shell.CreateShortcut("
+                            "$env:ASSISTANT_SHORTCUT_PATH); "
+                            "if (-not $shortcut.TargetPath) { "
+                            "throw 'Ярлик не має цільового файла' }; "
+                            "Write-Output $shortcut.TargetPath"
+                        ),
+                    ],
+                    env={**os.environ, "ASSISTANT_SHORTCUT_PATH": app_name},
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+                if result.returncode != 0 or not result.stdout.strip():
+                    message = result.stderr.strip() or "Не вдалося прочитати ціль ярлика"
+                    self.stdout.write(
+                        self.style.WARNING(f"Не вдалося визначити процес програми: {message}")
+                    )
+                    return
+                app_name = result.stdout.strip()
+
+            app_name = os.path.basename(app_name)
             if system == "Windows" and not app_name.lower().endswith(".exe"):
                 app_name += ".exe"
             if system == "Windows":
-                subprocess.run(
+                result = subprocess.run(
                     args=["taskkill", "/IM", app_name, "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    check=False,
                 )
             else:
-                subprocess.run(args=["pkill", "-f", app_name])
+                result = subprocess.run(
+                    args=["pkill", "-f", app_name],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            if result.returncode != 0:
+                message = result.stderr.strip() or result.stdout.strip()
+                if not message:
+                    message = f"Процес {app_name} не знайдено або його не вдалося завершити."
+                self.stdout.write(
+                    self.style.WARNING(f"Не вдалося закрити програму: {message}")
+                )
         except Exception as error:
             self.stdout.write(self.style.WARNING(f"Помилка закриття: {error}"))

@@ -19,9 +19,11 @@ from utils.file_explorer import (
     find_open_explorer_folders,
     get_open_explorer_tabs,
     find_file_targets,
+    find_file_targets_in_folder,
     find_similar_file_targets,
     get_active_explorer_path,
     get_active_explorer_subfolders,
+    is_current_folder_request,
     navigate_explorer_back,
     navigate_explorer_to,
     open_target,
@@ -42,8 +44,13 @@ def make_command():
     [
         ("Відкрий файл звіт.docx", ("file", "звіт.docx", False)),
         ("Відкрий папку Завантаження", ("folder", "Завантаження", False)),
+        ("Відкрий провід", ("folder", "провід", False)),
         ("Відкрий провідник", ("folder", "провідник", False)),
         ("Відкрий файл", ("file", "", False)),
+        (
+            "Відкрий файл звіт.docx у поточній папці",
+            ("file", "звіт.docx", False),
+        ),
         (
             "Відкрий папку Завантаження у новому вікні",
             ("folder", "Завантаження", True),
@@ -80,6 +87,64 @@ def test_find_file_target_without_extension(tmp_path):
         roots=[str(tmp_path)],
         expected_kind="file",
     ) == [str(target)]
+
+
+def test_find_file_target_only_searches_direct_children_of_current_folder(tmp_path):
+    current = tmp_path / "current"
+    nested = current / "nested"
+    nested.mkdir(parents=True)
+    direct_file = current / "report.docx"
+    nested_file = nested / "report.docx"
+    direct_file.touch()
+    nested_file.touch()
+
+    assert find_file_targets_in_folder("report", str(current)) == [str(direct_file)]
+    assert find_file_targets_in_folder("missing.docx", str(current)) == []
+
+
+def test_parse_current_folder_request_preserves_explicit_scope():
+    spoken_text = "Відкрити файл report.docx у поточній папці"
+
+    assert is_current_folder_request(spoken_text)
+    assert parse_open_target_command(spoken_text) == (
+        "file",
+        "report.docx",
+        False,
+    )
+
+
+@pytest.mark.parametrize(
+    "spoken_text",
+    [
+        "Відкрити файл report.docx у цій папці",
+        "Відкрити файл report.docx в поточному каталозі",
+    ],
+)
+def test_parse_current_folder_request_accepts_synonyms(spoken_text):
+    assert is_current_folder_request(spoken_text)
+
+
+def test_settings_alias_resolves_to_windows_settings(monkeypatch):
+    monkeypatch.setattr("utils.file_explorer.platform.system", lambda: "Windows")
+
+    assert parse_open_target_command("відкрити налаштування") == (
+        "folder",
+        "налаштування",
+        False,
+    )
+    assert find_file_targets("налаштування", expected_kind="folder") == [
+        "ms-settings:"
+    ]
+
+
+def test_open_target_launches_windows_settings(monkeypatch):
+    startfile = Mock()
+    monkeypatch.setattr("utils.file_explorer.platform.system", lambda: "Windows")
+    monkeypatch.setattr("utils.file_explorer.os.startfile", startfile, raising=False)
+
+    open_target("ms-settings:")
+
+    startfile.assert_called_once_with("ms-settings:")
 
 
 @pytest.mark.parametrize(
@@ -252,16 +317,19 @@ def test_file_open_command_uses_default_application(tmp_path):
     open_target.assert_called_once_with(str(target))
 
 
-def test_open_explorer_voice_command_launches_file_manager():
+@pytest.mark.parametrize("spoken_name", ["Провідник", "провід"])
+def test_open_explorer_voice_command_launches_file_manager(spoken_name):
     command = make_command()
 
     with (
         patch.object(run_assistant, "open_target") as open_target,
+        patch.object(run_assistant, "get_known_apps") as get_known_apps,
         patch.object(run_assistant, "voicing_and_printing_answer"),
     ):
-        command.doing_task("відкрий Провідник")
+        command.doing_task(f"відкрий {spoken_name}")
 
     open_target.assert_called_once_with("explorer")
+    get_known_apps.assert_not_called()
 
 
 def test_folder_opens_in_new_tab_of_existing_explorer_window(tmp_path):
@@ -297,6 +365,21 @@ def test_music_alias_resolves_to_music_folder_not_home(monkeypatch, tmp_path):
     assert find_file_targets("музика", expected_kind="folder") == [str(music)]
 
 
+def test_folder_opens_requested_path_in_new_explorer_window(tmp_path):
+    folder = tmp_path / "Мої файли" / "Python"
+    folder.mkdir(parents=True)
+
+    with (
+        patch("utils.file_explorer.platform.system", return_value="Windows"),
+        patch("utils.file_explorer.subprocess.Popen") as popen,
+    ):
+        open_target(str(folder), new_window=True)
+
+    popen.assert_called_once_with(
+        ["explorer.exe", "/n,", "/e,", os.path.abspath(folder)]
+    )
+
+
 def test_folder_opens_in_new_explorer_window_when_requested(tmp_path):
     folder = tmp_path / "Документи"
     folder.mkdir()
@@ -308,7 +391,9 @@ def test_folder_opens_in_new_explorer_window_when_requested(tmp_path):
     ):
         open_target(str(folder), new_window=True)
 
-    popen.assert_called_once_with(["explorer.exe", "/n", str(folder)])
+    popen.assert_called_once_with(
+        ["explorer.exe", "/n,", "/e,", os.path.abspath(folder)]
+    )
     run.assert_not_called()
 
 
@@ -340,6 +425,63 @@ def test_new_window_voice_option_is_preserved_while_selecting_file_folder(tmp_pa
         command.doing_task(f"відкрий папку {folder} у новому вікні")
 
     open_target.assert_called_once_with(str(folder), new_window=True)
+
+
+def test_open_file_in_current_folder_uses_active_explorer_path(tmp_path):
+    report = str(tmp_path / "report.docx")
+    command = make_command()
+
+    with (
+        patch.object(run_assistant, "get_active_explorer_path", return_value=str(tmp_path)),
+        patch.object(
+            run_assistant,
+            "find_file_targets_in_folder",
+            return_value=[report],
+        ) as find_in_current,
+        patch.object(run_assistant, "open_target") as open_file,
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+    ):
+        command.doing_task("відкрити файл report.docx у поточній папці")
+
+    find_in_current.assert_called_once_with("report.docx", str(tmp_path))
+    open_file.assert_called_once_with(report)
+
+
+def test_current_folder_scope_is_preserved_when_file_name_is_requested_later(
+    tmp_path,
+):
+    report = str(tmp_path / "report.docx")
+    command = make_command()
+
+    with (
+        patch.object(run_assistant, "get_active_explorer_path", return_value=str(tmp_path)),
+        patch.object(
+            run_assistant,
+            "find_file_targets_in_folder",
+            return_value=[report],
+        ) as find_in_current,
+        patch.object(run_assistant, "open_target") as open_file,
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+    ):
+        command.doing_task("відкрити файл у поточній папці")
+        assert command.pending_file["current_folder"] is True
+        command.doing_task("report.docx")
+
+    find_in_current.assert_called_once_with("report.docx", str(tmp_path))
+    open_file.assert_called_once_with(report)
+
+
+def test_open_settings_command_opens_windows_settings():
+    command = make_command()
+
+    with (
+        patch.object(run_assistant, "find_file_targets", return_value=["ms-settings:"]),
+        patch.object(run_assistant, "open_target") as open_settings,
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+    ):
+        command.doing_task("відкрити налаштування")
+
+    open_settings.assert_called_once_with("ms-settings:")
 
 
 @pytest.mark.parametrize(
@@ -685,10 +827,43 @@ def test_forward_navigation_lists_small_number_of_subfolders(tmp_path):
         command.navigate_explorer_forward()
 
     assert write.call_args.args[0] == "Підпапки: " + "; ".join(
-        f"Folder {index}" for index in range(1, 8)
+        f"{index}. Folder {index}" for index in range(1, 8)
     )
-    assert "Назвіть папку" in speak.call_args.args[0]
+    assert "Назвіть назву папки або її номер" in speak.call_args.args[0]
     assert command.pending_file["awaiting_explorer_folder_name"] is True
+
+
+def test_forward_navigation_with_unmatched_name_offers_screen_list_and_retry(
+    tmp_path,
+):
+    folders = [
+        str(tmp_path / "AI"),
+        str(tmp_path / "Django"),
+        str(tmp_path / "Lesson_tasks"),
+        str(tmp_path / "Projects"),
+    ]
+    command = make_command()
+    with (
+        patch.object(
+            run_assistant,
+            "get_active_explorer_subfolders",
+            return_value=folders,
+        ),
+        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+        patch.object(command.stdout, "write") as write,
+        patch.object(run_assistant, "navigate_explorer_to") as navigate,
+    ):
+        command.doing_task("вперед John")
+
+    assert write.call_args.args[0] == (
+        "Підпапки: 1. AI; 2. Django; 3. Lesson_tasks; 4. Projects"
+    )
+    assert "Список показано на екрані" in speak.call_args.args[0]
+    assert "Назвіть номер" in speak.call_args.args[0]
+    assert "повторіть її назву" in speak.call_args.args[0]
+    assert "AI; Django" not in speak.call_args.args[0]
+    assert command.pending_file["awaiting_explorer_folder_name"] is True
+    navigate.assert_not_called()
 
 
 def test_forward_navigation_prompts_for_name_when_more_than_seven_folders(tmp_path):
@@ -733,6 +908,29 @@ def test_explorer_folder_name_matching_ignores_extra_unrecognized_words(tmp_path
         "вперед Telegram тексто",
         [telegram, downloads],
     ) == telegram
+
+
+def test_explorer_folder_name_can_be_selected_by_number(tmp_path):
+    folders = [
+        str(tmp_path / "AI"),
+        str(tmp_path / "Django"),
+        str(tmp_path / "Lesson_tasks"),
+        str(tmp_path / "Projects"),
+    ]
+    command = make_command()
+    command.pending_file = {
+        "awaiting_explorer_folder_name": True,
+        "targets": folders,
+    }
+
+    with (
+        patch.object(run_assistant, "navigate_explorer_to", return_value=True) as navigate,
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+    ):
+        command.doing_task("варіант 4")
+
+    navigate.assert_called_once_with(folders[3])
+    assert command.pending_file is None
 
 
 def test_explorer_folder_name_matching_supports_ukrainian_pronunciation_of_english(
@@ -796,6 +994,30 @@ def test_forward_command_uses_trailing_folder_name_without_selection_prompt(tmp_
     write.assert_not_called()
     speak.assert_called_once()
     assert "Перейшла до папки frontend" in speak.call_args.args[0]
+
+
+@pytest.mark.parametrize(
+    ("spoken_text", "requested_name"),
+    [
+        ("далі", ""),
+        ("далі фронтенд", "фронтенд"),
+        ("далі по папках", ""),
+        ("вперед фронтенд", "фронтенд"),
+    ],
+)
+def test_forward_navigation_accepts_dali_synonym(
+    spoken_text,
+    requested_name,
+):
+    command = make_command()
+    with (
+        patch.object(run_assistant, "get_active_explorer_subfolders", return_value=[]),
+        patch.object(command, "navigate_explorer_forward") as navigate,
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+    ):
+        command.doing_task(spoken_text)
+
+    navigate.assert_called_once_with(requested_name=requested_name)
 
 
 def test_unrecognized_audio_is_silent_while_waiting_for_explorer_folder(tmp_path):

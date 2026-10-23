@@ -75,22 +75,30 @@ def test_recognizer_is_calibrated_and_keeps_short_phrases():
 
     recognizer.adjust_for_ambient_noise.assert_called_once_with(source, duration=1)
     assert recognizer.dynamic_energy_threshold is True
-    assert recognizer.phrase_threshold == 0.15
-    assert recognizer.pause_threshold == 0.8
-    assert recognizer.non_speaking_duration == 0.5
+    assert recognizer.phrase_threshold == 0.05
+    assert recognizer.pause_threshold == 0.6
+    assert recognizer.non_speaking_duration == 0.25
+    assert recognizer.phrase_threshold < 0.15
+    assert recognizer.pause_threshold >= recognizer.non_speaking_duration
 
 
 def test_listener_records_while_assistant_is_speaking():
     recognizer = Mock()
     recognizer.listen.return_value = "user audio"
+    source = object()
     voicing_answer.VOICE_ACTIVE.set()
     try:
-        audio = Command.listen_for_audio(recognizer, source=object())
+        audio = Command.listen_for_audio(recognizer, source=source)
     finally:
         voicing_answer.VOICE_ACTIVE.clear()
 
     assert audio == "user audio"
     recognizer.listen.assert_called_once()
+    assert recognizer.listen.call_args.kwargs == {
+        "source": source,
+        "timeout": 1,
+        "phrase_time_limit": 5,
+    }
 
 
 def test_interrupt_voice_stops_playback_and_invalidates_queued_speech():
@@ -455,7 +463,7 @@ def test_app_command_accepts_verb_forms(tmp_path, spoken_verb, is_open):
     if is_open:
         open_app.assert_called_once_with(path="C:\\Apps\\steam.exe")
     else:
-        close_app.assert_called_once_with(app_name="steam.exe")
+        close_app.assert_called_once_with(app_name="C:\\Apps\\steam.exe")
 
 
 def test_missing_app_name_prompts_and_accepts_follow_up_title(tmp_path):
@@ -484,6 +492,61 @@ def test_missing_app_name_prompts_and_accepts_follow_up_title(tmp_path):
         command.doing_task("Sticky Notes")
 
     open_app.assert_called_once_with(path="C:\\Apps\\Sticky Notes.exe")
+    assert command.pending_app is None
+
+
+@pytest.mark.parametrize(
+    "answer",
+    ["відкрити", "відкрити програму", "відкрий застосунок"],
+)
+def test_app_name_prompt_does_not_search_when_user_repeats_only_open_verb(
+    tmp_path,
+    answer,
+):
+    command, open_app = make_command(tmp_path, [])
+    command.pending_app = {
+        "is_open": True,
+        "awaiting_name": True,
+    }
+
+    with (
+        patch.object(run_assistant, "get_known_apps") as get_apps,
+        patch.object(run_assistant, "find_similar_apps") as find_similar,
+        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+    ):
+        command.doing_task(answer)
+
+    get_apps.assert_not_called()
+    find_similar.assert_not_called()
+    open_app.assert_not_called()
+    assert command.pending_app == {
+        "is_open": True,
+        "awaiting_name": True,
+    }
+    assert "Яку програму відкрити?" in speak.call_args.args[0]
+
+
+def test_app_name_prompt_accepts_verb_followed_by_app_name(tmp_path):
+    command, _open_app = make_command(tmp_path, [])
+    command.pending_app = {
+        "is_open": True,
+        "awaiting_name": True,
+    }
+
+    with (
+        patch.object(
+            run_assistant,
+            "get_known_apps",
+            return_value={"Telegram": r"C:\Apps\Telegram.exe"},
+        ),
+        patch.object(run_assistant, "is_unknown", return_value=False),
+        patch.object(run_assistant, "register_found_app"),
+        patch.object(command, "open_app", return_value=True) as open_app,
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+    ):
+        command.doing_task("відкрити програму Telegram")
+
+    open_app.assert_called_once_with(path=r"C:\Apps\Telegram.exe")
     assert command.pending_app is None
 
 
@@ -522,6 +585,76 @@ def test_windows_store_app_close_stops_processes_from_package(tmp_path):
         "SpotifyAB.SpotifyMusic_zpdnekdrzrea0"
     )
     assert "Get-CimInstance Win32_Process" in run.call_args.kwargs["args"][-1]
+
+
+def test_windows_app_close_resolves_shortcut_to_executable(tmp_path):
+    command, _ = make_command(tmp_path, [])
+    shortcut = (
+        r"C:\Users\test\AppData\Roaming\Microsoft\Windows\Start Menu"
+        r"\Programs\Telegram.lnk"
+    )
+    shortcut_target = r"C:\Users\test\AppData\Roaming\Telegram Desktop\Telegram.exe"
+    resolve_shortcut = Mock(
+        return_value=Mock(returncode=0, stdout=f"{shortcut_target}\n", stderr="")
+    )
+    kill_process = Mock(return_value=Mock(returncode=0, stdout="", stderr=""))
+
+    with (
+        patch.object(run_assistant.platform, "system", return_value="Windows"),
+        patch.object(
+            run_assistant.subprocess,
+            "run",
+            side_effect=[resolve_shortcut.return_value, kill_process.return_value],
+        ) as run,
+    ):
+        Command.close_app(command, shortcut)
+
+    assert run.call_count == 2
+    assert run.call_args_list[0].kwargs["env"]["ASSISTANT_SHORTCUT_PATH"] == shortcut
+    assert "CreateShortcut" in run.call_args_list[0].kwargs["args"][-1]
+    assert run.call_args_list[1].kwargs["args"] == [
+        "taskkill",
+        "/IM",
+        "Telegram.exe",
+        "/F",
+    ]
+
+
+def test_windows_app_close_reports_when_process_cannot_be_stopped(tmp_path):
+    command, _ = make_command(tmp_path, [])
+    command.stdout = Mock()
+    result = Mock(returncode=128, stdout="", stderr="Access is denied")
+
+    with (
+        patch.object(run_assistant.platform, "system", return_value="Windows"),
+        patch.object(run_assistant.subprocess, "run", return_value=result) as run,
+    ):
+        Command.close_app(command, r"C:\Apps\Telegram.exe")
+
+    run.assert_called_once()
+    command.stdout.write.assert_called_once()
+    assert "Access is denied" in command.stdout.write.call_args.args[0]
+
+
+def test_close_app_verb_passes_shortcut_path_to_close_handler(tmp_path):
+    command, _ = make_command(tmp_path, [])
+    command.pending_app = None
+    shortcut = r"C:\Users\test\Telegram.lnk"
+
+    with (
+        patch.object(
+            run_assistant,
+            "get_known_apps",
+            return_value={"Telegram": shortcut},
+        ),
+        patch.object(run_assistant, "is_unknown", return_value=False),
+        patch.object(run_assistant, "register_found_app"),
+        patch.object(command, "close_app") as close_app,
+        patch.object(run_assistant, "voicing_and_printing_answer"),
+    ):
+        command.doing_task("закрий програму Telegram")
+
+    close_app.assert_called_once_with(app_name=shortcut)
 
 
 def test_semantic_candidate_requires_learning_confirmation_before_action(tmp_path):
