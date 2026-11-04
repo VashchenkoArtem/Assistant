@@ -38,6 +38,7 @@ propcache==0.5.4
 PyAudio==0.2.14
 pycparser==3.0
 pygame==2.6.1
+PyQt6>=6.8,<7.0
 Pygments==2.21.0
 pytest==9.1.1
 pywin32==312
