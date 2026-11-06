@@ -276,7 +276,7 @@ def test_unrecognized_audio_prompts_once_and_waits_until_cancelled(tmp_path):
 
         assert command.pending_app is not None
         command.stdout.write.assert_called_once_with(
-            "Не розібрав звук. Повторіть відповідь або скажіть «скасувати»."
+            "Не розібрав голос. Введіть відповідь або «скасувати»."
         )
         assert command.unrecognized_audio_prompted is True
 
@@ -346,7 +346,7 @@ def test_rejecting_guessed_app_name_keeps_action_and_accepts_corrected_name(tmp_
         assert command.pending_app is not None
         assert command.pending_app["awaiting_name"] is True
         open_app.assert_not_called()
-        assert "точну назву" in speak.call_args.args[0]
+        assert "Уточніть" in speak.call_args.args[0]
 
         with (
             patch.object(
@@ -395,8 +395,9 @@ def test_semantic_rejection_can_be_learned_without_executing_old_app_name(tmp_pa
 
     assert command.response_repository.find_by_pattern("аж ніяк") is not None
     assert command.pending_learning_candidate is None
+    assert command.pending_app is not None
     assert command.pending_app["awaiting_name"] is True
-    assert "точну назву" in speak.call_args.args[0]
+    assert "Уточніть" in speak.call_args.args[0]
     open_app.assert_not_called()
     register.assert_not_called()
 
@@ -423,8 +424,9 @@ def test_declining_semantic_rejection_learning_still_requests_corrected_name(tmp
 
     assert not command.response_repository.exists("аж ніяк")
     assert command.pending_learning_candidate is None
+    assert command.pending_app is not None
     assert command.pending_app["awaiting_name"] is True
-    assert "точну назву" in speak.call_args.args[0]
+    assert "Уточніть" in speak.call_args.args[0]
     open_app.assert_not_called()
     register.assert_not_called()
 

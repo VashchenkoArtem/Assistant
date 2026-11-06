@@ -149,7 +149,9 @@ def test_repository_does_not_seed_single_character_responses(tmp_path):
 
 def test_repository_adds_missing_defaults_to_existing_database(tmp_path):
     repository = make_repository(tmp_path)
-    repository.delete(repository.find_by_pattern("звісно").id)
+    existing = repository.find_by_pattern("звісно")
+    assert existing is not None
+    repository.delete(existing.id)
     repository.seed_default_patterns()
 
     assert repository.find_by_pattern("звісно") is not None

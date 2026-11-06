@@ -9,7 +9,6 @@ import edge_tts
 import pygame
 
 VOICE = "uk-UA-PolinaNeural"
-VOICE = "uk-UA-PolinaNeural"
 
 voice_profile = {
     "voice": VOICE,
@@ -23,6 +22,7 @@ MIXER_LOCK = threading.Lock()
 AUDIO_LOCK = threading.Lock()
 VOICE_ACTIVE = threading.Event()
 VOICE_STATE_LOCK = threading.Lock()
+GUI_TEXT_MODE = threading.Event()
 _active_voice_requests = 0
 _voice_generation = 0
 
@@ -125,7 +125,7 @@ def voicing_text(text: str, generation: int | None = None):
         print(f"Error playing file: {e}")
 
     finally:
-        for attempt in range(10):
+        for _attempt in range(10):
             try:
                 if os.path.exists(file_name):
                     os.remove(file_name)
@@ -187,5 +187,6 @@ def interrupt_voice() -> None:
 
 
 def voicing_and_printing_answer(text: str):
-    run_voice(text)
+    if not GUI_TEXT_MODE.is_set():
+        run_voice(text)
     print(text)

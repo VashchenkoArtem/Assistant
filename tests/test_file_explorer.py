@@ -464,6 +464,7 @@ def test_current_folder_scope_is_preserved_when_file_name_is_requested_later(
         patch.object(run_assistant, "voicing_and_printing_answer"),
     ):
         command.doing_task("відкрити файл у поточній папці")
+        assert command.pending_file is not None
         assert command.pending_file["current_folder"] is True
         command.doing_task("report.docx")
 
@@ -783,11 +784,12 @@ def test_close_folder_prompts_for_selection_when_multiple_tabs_match():
         command.doing_task("закрити папку завантаження")
 
     close_tab.assert_not_called()
+    assert command.pending_file is not None
     assert command.pending_file["awaiting_explorer_close_selection"] is True
     assert command.pending_file["targets"] == tabs
     assert "1. Загрузки" in write.call_args.args[0]
     assert "2. Загрузки" in write.call_args.args[0]
-    assert "Назвіть номер" in speak.call_args.args[0]
+    assert "Вкажіть номер" in speak.call_args.args[0]
 
 
 def test_close_folder_selection_closes_only_selected_tab():
@@ -829,7 +831,8 @@ def test_forward_navigation_lists_small_number_of_subfolders(tmp_path):
     assert write.call_args.args[0] == "Підпапки: " + "; ".join(
         f"{index}. Folder {index}" for index in range(1, 8)
     )
-    assert "Назвіть назву папки або її номер" in speak.call_args.args[0]
+    assert "Вкажіть назву папки або номер" in speak.call_args.args[0]
+    assert command.pending_file is not None
     assert command.pending_file["awaiting_explorer_folder_name"] is True
 
 
@@ -858,10 +861,11 @@ def test_forward_navigation_with_unmatched_name_offers_screen_list_and_retry(
     assert write.call_args.args[0] == (
         "Підпапки: 1. AI; 2. Django; 3. Lesson_tasks; 4. Projects"
     )
-    assert "Список показано на екрані" in speak.call_args.args[0]
-    assert "Назвіть номер" in speak.call_args.args[0]
-    assert "повторіть її назву" in speak.call_args.args[0]
+    assert "Список показано на екран" in speak.call_args.args[0]
+    assert "Вкажіть номер" in speak.call_args.args[0]
+    assert "уточніть назву" in speak.call_args.args[0]
     assert "AI; Django" not in speak.call_args.args[0]
+    assert command.pending_file is not None
     assert command.pending_file["awaiting_explorer_folder_name"] is True
     navigate.assert_not_called()
 
@@ -879,6 +883,7 @@ def test_forward_navigation_prompts_for_name_when_more_than_seven_folders(tmp_pa
 
     write.assert_not_called()
     assert "більше семи" in speak.call_args.args[0]
+    assert command.pending_file is not None
     assert command.pending_file["targets"] == folders
 
 

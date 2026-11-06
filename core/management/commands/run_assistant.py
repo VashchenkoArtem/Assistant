@@ -104,8 +104,8 @@ SELECTION_WORD_TO_NUMBER = {
 }
 
 class Command(BaseCommand):
-    def handle(self, *args, **kwargs):
-
+    def initialize_for_text(self) -> None:
+        """Initialize assistant state for text or GUI-driven commands."""
         self.run = True
         self.pending_app: dict[str, Any] | None = None
         self.pending_file: dict[str, Any] | None = None
@@ -114,8 +114,11 @@ class Command(BaseCommand):
         self.response_repository = ResponseRepository()
         self.response_analyzer = ResponseAnalyzer(self.response_repository)
         self.response_learner = ResponseLearner(self.response_repository)
-
         self.paused = False
+        sync_installed_apps()
+
+    def handle(self, *args, **kwargs):
+        self.initialize_for_text()
         synced_apps = sync_installed_apps()
         self.stdout.write(f"Збережено знайдені програми: {synced_apps}")
         self.stdout.write(self.style.SUCCESS(f"Асистент почав роботу"))
@@ -345,7 +348,7 @@ class Command(BaseCommand):
 
         self.unrecognized_audio_prompted = True
         self.stdout.write(
-            "Не розібрав звук. Повторіть відповідь або скажіть «скасувати»."
+            "Не розібрав голос. Введіть відповідь або «скасувати»."
         )
 
     def analyze_response(self, text, question=""):
@@ -391,13 +394,13 @@ class Command(BaseCommand):
                 if candidate is not None:
                     self.pending_learning_candidate = candidate
                     voicing_and_printing_answer(
-                        f"Запам'ятати фразу «{candidate.text}» як відмову? Скажіть так або ні."
+                        f"Запам'ятати фразу «{candidate.text}» як відмову? Підтвердіть дію: так або ні."
                     )
                     return
 
             pending_app["awaiting_name"] = True
             voicing_and_printing_answer(
-                "Добре, це не та програма. Назвіть її точну назву."
+                "Добре, це не та програма. Уточніть точну назву."
             )
             return
 
@@ -415,7 +418,7 @@ class Command(BaseCommand):
                     else "відмову"
                 )
                 voicing_and_printing_answer(
-                    f"Запам'ятати фразу «{candidate.text}» як {category_label}? Скажіть так або ні."
+                    f"Запам'ятати фразу «{candidate.text}» як {category_label}? Підтвердіть дію: так або ні."
                 )
                 return
 
@@ -434,7 +437,7 @@ class Command(BaseCommand):
         if not corrected_name:
             action = "відкрити" if pending_app["is_open"] else "закрити"
             voicing_and_printing_answer(
-                f"Яку програму {action}? Назвіть її назву."
+                f"Яку програму {action}? Вкажіть назву."
             )
             return
 
@@ -450,7 +453,7 @@ class Command(BaseCommand):
 
         question = (
             f"Запам'ятати фразу «{candidate.text}»? "
-            "Скажіть так або ні."
+            "Підтвердіть дію: так або ні."
         )
         analysis = self.analyze_response(text, question=question)
 
@@ -478,7 +481,7 @@ class Command(BaseCommand):
         if candidate.category == ResponseCategory.REJECTION:
             if self.pending_app is not None:
                 self.pending_app["awaiting_name"] = True
-            voicing_and_printing_answer("Назвіть точну назву програми.")
+            voicing_and_printing_answer("Уточніть назву програми.")
             return
 
         self._complete_pending_app()
@@ -536,7 +539,7 @@ class Command(BaseCommand):
                 "current_folder": current_folder,
             }
             label = "файл" if kind == "file" else "папку"
-            voicing_and_printing_answer(f"Який {label} відкрити? Назвіть його.")
+            voicing_and_printing_answer(f"Вкажіть {label}, який потрібно відкрити.")
             return
 
         folder = None
@@ -545,7 +548,7 @@ class Command(BaseCommand):
                 folder = get_active_explorer_path()
                 if folder is None or not os.path.isdir(folder):
                     voicing_and_printing_answer(
-                        "Відкрийте потрібну папку у Провіднику й повторіть команду."
+                        "Вкажіть потрібну папку у Провіднику та повторно надішліть запит."
                     )
                     return
                 targets = find_file_targets_in_folder(target, folder)
@@ -560,8 +563,9 @@ class Command(BaseCommand):
         else:
             targets = find_file_targets(target, expected_kind=kind)
         if not targets:
+            roots = [folder] if folder is not None else None
             suggestions = (
-                find_similar_file_targets(target, roots=[folder], expected_kind=kind)
+                find_similar_file_targets(target, roots=roots, expected_kind=kind)
                 if current_folder
                 else find_similar_file_targets(target, expected_kind=kind)
             )
@@ -578,12 +582,12 @@ class Command(BaseCommand):
             if current_folder:
                 voicing_and_printing_answer(
                     f"Не знайшла {label} «{target}» у поточній папці. "
-                    "Назвіть інший файл або скажіть повний шлях."
+                    "Вкажіть іншу назву файла або повний шлях."
                 )
             else:
                 voicing_and_printing_answer(
                     f"Не знайшла {label} «{target}» у стандартних папках. "
-                    "Скажіть повний шлях або назвіть інший елемент."
+                    "Введіть повний шлях або уточніть назву елемента."
                 )
             return
 
@@ -606,7 +610,7 @@ class Command(BaseCommand):
         self.stdout.write(f"Варіанти файлів і папок: {choices}")
         voicing_and_printing_answer(
             f"{prefix} Список варіантів виведено на екран. "
-            "Назвіть номер потрібного або скажіть «скасувати»."
+            "Вкажіть номер потрібного варіанта або введіть «скасувати»."
         )
 
     def handle_file_selection(self, text: str) -> None:
@@ -618,7 +622,7 @@ class Command(BaseCommand):
         selected_index = self.find_selection_index(text, len(targets))
         if selected_index is None:
             voicing_and_printing_answer(
-                "Не розпізнала вибір. Назвіть номер потрібного варіанта або скасуйте дію."
+                "Не розпізнала вибір. Вкажіть номер потрібного варіанта або скасуйте дію."
             )
             return
 
@@ -628,7 +632,7 @@ class Command(BaseCommand):
         pending_file["selected_target"] = selected_target
         voicing_and_printing_answer(
             f"Ви обрали {os.path.basename(selected_target)}. "
-            "Відкрити? Скажіть «так» або «ні»."
+            "Підтвердіть відкриття: так або ні."
         )
 
     def handle_file_selection_confirmation(self, text: str) -> None:
@@ -640,7 +644,7 @@ class Command(BaseCommand):
         analysis = self.analyze_response(text, question=question)
         if analysis.category == ResponseCategory.UNKNOWN:
             voicing_and_printing_answer(
-                "Не зрозуміла відповідь. Відкрити вибраний варіант? Скажіть «так» або «ні»."
+                "Не зрозуміла відповідь. Підтвердіть відкриття вибраного варіанта: так або ні."
             )
             return
         if analysis.category == ResponseCategory.REJECTION:
@@ -719,7 +723,7 @@ class Command(BaseCommand):
     def close_explorer_folder(self, folder_name: str) -> None:
         folder_name = folder_name.strip().strip("\"'«».,!? ")
         if not folder_name:
-            voicing_and_printing_answer("Назвіть папку, яку потрібно закрити.")
+            voicing_and_printing_answer("Вкажіть папку, яку потрібно закрити.")
             return
 
         try:
@@ -747,7 +751,7 @@ class Command(BaseCommand):
             self.stdout.write(f"Відкриті папки: {choices}")
             voicing_and_printing_answer(
                 "Знайшла кілька відкритих папок. "
-                "Назвіть номер тієї, яку потрібно закрити, або скажіть «скасувати»."
+                "Вкажіть номер папки для закриття або скасуйте дію."
             )
             return
 
@@ -778,7 +782,7 @@ class Command(BaseCommand):
             voicing_and_printing_answer(f"Закрила папку {tab.name}.")
         else:
             voicing_and_printing_answer(
-                "Не знайшла вибрану вкладку Провідника. Повторіть команду."
+                "Не знайшла вибрану вкладку Провідника. Повторно надішліть запит."
             )
 
     def navigate_explorer_back(self) -> None:
@@ -824,11 +828,11 @@ class Command(BaseCommand):
             if requested_name:
                 voicing_and_printing_answer(
                     f"Не знайшла папку «{requested_name}». "
-                    "У цій папці більше семи підпапок. Повторіть точну назву."
+                    "У цій папці більше семи підпапок. Уточніть назву."
                 )
             else:
                 voicing_and_printing_answer(
-                    "У цій папці більше семи підпапок. Назвіть конкретну папку."
+                    "У цій папці більше семи підпапок. Вкажіть конкретну папку."
                 )
         else:
             names = "; ".join(
@@ -839,13 +843,13 @@ class Command(BaseCommand):
             if requested_name:
                 voicing_and_printing_answer(
                     f"Не знайшла папку «{requested_name}». "
-                    "Список показано на екрані. Назвіть номер потрібної папки "
-                    "або повторіть її назву."
+                    "Список показано на екран. Вкажіть номер потрібної папки "
+                    "або уточніть назву."
                 )
             else:
                 voicing_and_printing_answer(
-                    "Підпапки виведено на екран. Назвіть назву папки "
-                    "або її номер у списку."
+                    "Підпапки виведено на екран. Вкажіть назву папки "
+                    "або номер у списку."
                 )
 
         self.pending_file = {
@@ -941,7 +945,7 @@ class Command(BaseCommand):
     def handle_open_close(self, text, is_open):
         match = APP_COMMAND_PATTERN.search(text)
         if match is None:
-            voicing_and_printing_answer("Повторіть команду для відкриття або закриття програми")
+            voicing_and_printing_answer("Надішліть команду для відкриття або закриття програми.")
             return
 
         target_word = text[match.end():].strip(" \t.,!?")
@@ -953,7 +957,7 @@ class Command(BaseCommand):
                 "is_open": is_open,
                 "awaiting_name": True,
             }
-            voicing_and_printing_answer(f"Яку програму {action}? Назвіть її.")
+            voicing_and_printing_answer(f"Яку програму {action}? Вкажіть назву.")
             return
 
         voicing_and_printing_answer("Починаю шукати програму...")
@@ -1026,7 +1030,7 @@ class Command(BaseCommand):
             )
             if exact_match is None:
                 voicing_and_printing_answer(
-                    "Не розпізнала вибір. Назвіть номер однієї з програм у списку "
+                    "Не розпізнала вибір. Вкажіть номер однієї з програм у списку "
                     "або скасуйте дію."
                 )
                 return
@@ -1044,7 +1048,7 @@ class Command(BaseCommand):
         pending_app["selected_name"] = name
         pending_app["selected_path"] = path
         voicing_and_printing_answer(
-            f"Ви обрали {name}. Виконати дію? Скажіть «так» або «ні»."
+            f"Ви обрали {name}. Виконати дію? Підтвердіть дію: так або ні."
         )
 
     def handle_app_selection_confirmation(self, text: str) -> None:
@@ -1057,7 +1061,7 @@ class Command(BaseCommand):
         if analysis.category == ResponseCategory.UNKNOWN:
             voicing_and_printing_answer(
                 f"Не зрозуміла відповідь. Виконати дію з програмою "
-                f"{pending_app['selected_name']}? Скажіть «так» або «ні»."
+                f"{pending_app['selected_name']}? Підтвердіть дію: так або ні."
             )
             return
         if analysis.category == ResponseCategory.REJECTION:
