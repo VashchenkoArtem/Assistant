@@ -179,6 +179,23 @@ def test_find_similar_file_targets_suggests_close_file_names(tmp_path):
     ) == [str(target)]
 
 
+def test_find_similar_file_targets_matches_cyrillic_and_latin_folder_names(tmp_path):
+    target = tmp_path / "Codex"
+    target.mkdir()
+
+    assert find_similar_file_targets(
+        "кодекс",
+        roots=[str(tmp_path)],
+        expected_kind="folder",
+    ) == [str(target)]
+
+
+def test_match_explorer_folder_name_accepts_cross_script_name(tmp_path):
+    targets = [str(tmp_path / "Alpha"), str(tmp_path / "Codex")]
+
+    assert Command._match_explorer_folder_name("кодекс", targets) == targets[1]
+
+
 def test_similar_folder_search_includes_standard_folder_alias(tmp_path, monkeypatch):
     documents = tmp_path / "Documents"
     music = tmp_path / "Music"

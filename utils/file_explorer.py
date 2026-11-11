@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from typing import NamedTuple
 
 from utils.text_similarity import partial_similarity, similarity
+from utils.transliterate import transliterate
 
 
 OPEN_VERB = re.compile(
@@ -165,6 +166,27 @@ def _normalized_name(value: str) -> str:
     return re.sub(r"[^\w]+", " ", value.casefold(), flags=re.UNICODE).strip()
 
 
+def _contains_cyrillic(value: str) -> bool:
+    lowered = value.casefold()
+    return any(
+        "\u0430" <= ch <= "\u044f" or ch in {"\u0456", "\u0457", "\u0454", "\u0491"}
+        for ch in lowered
+    )
+
+
+def _name_variants(value: str) -> set[str]:
+    variants: set[str] = set()
+    cleaned = _normalized_name(value)
+    for fragment in re.findall(r"[^\W_]+", cleaned):
+        if len(fragment) < 3:
+            continue
+        variants.add(fragment)
+        transliterated = transliterate(fragment)
+        if transliterated:
+            variants.add(transliterated)
+    return variants
+
+
 def _is_expected_kind(path: str, expected_kind: str | None) -> bool:
     return (
         (expected_kind != "file" or os.path.isfile(path))
@@ -288,10 +310,18 @@ def find_similar_file_targets(
             score = max(
                 similarity(query, candidate),
                 partial_similarity(query, candidate),
+                *[
+                    similarity(q_variant, c_variant)
+                    for q_variant in _name_variants(query)
+                    for c_variant in _name_variants(candidate)
+                ],
             )
             if candidate.startswith(query):
                 score = max(score, 0.9)
-            if score >= SIMILARITY_THRESHOLD:
+            candidate_threshold = (
+                0.5 if _contains_cyrillic(query) ^ _contains_cyrillic(candidate) else SIMILARITY_THRESHOLD
+            )
+            if score >= candidate_threshold:
                 ranked.append((score, path))
                 ranked_paths.add(canonical_path)
 
@@ -313,6 +343,11 @@ def find_similar_file_targets(
             score = max(
                 similarity(query, candidate),
                 partial_similarity(query, candidate),
+                *[
+                    similarity(q_variant, c_variant)
+                    for q_variant in _name_variants(query)
+                    for c_variant in _name_variants(candidate)
+                ],
             )
             if candidate.startswith(query):
                 score = max(score, 0.9)

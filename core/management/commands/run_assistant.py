@@ -897,49 +897,75 @@ class Command(BaseCommand):
         drive, _tail = os.path.splitdrive(path)
         return os.path.basename(trimmed_path) or drive or path
 
+    @staticmethod
+    def _contains_cyrillic(value: str) -> bool:
+        lowered = value.casefold()
+        return any(
+            "\u0430" <= ch <= "\u044f" or ch in {"\u0456", "\u0457", "\u0454", "\u0491"}
+            for ch in lowered
+        )
+
+    @staticmethod
+    def _folder_name_variants(value: str) -> set[str]:
+        tokens = re.findall(r"[^\W_]+", value.casefold())
+        variants: set[str] = set()
+        for token in tokens:
+            if len(token) < 3:
+                continue
+            variants.add(token)
+            transliterated = transliterate(token)
+            if transliterated:
+                variants.add(transliterated)
+        return variants
+
     @classmethod
     def _match_explorer_folder_name(
         cls,
         spoken_text: str,
         targets: list[str],
     ) -> str | None:
-        normalized_words = re.findall(r"[^\W_]+", spoken_text.casefold())
-        words = [word for word in normalized_words if len(word) >= 3]
-        if not words:
+        query_tokens = cls._folder_name_variants(spoken_text)
+        if not query_tokens:
             return None
 
         ranked: list[tuple[float, str]] = []
         for path in targets:
-            folder_words = re.findall(
-                r"[^\W_]+",
-                cls._explorer_folder_name(path).casefold(),
-            )
+            folder_name = cls._explorer_folder_name(path)
+            folder_tokens = cls._folder_name_variants(folder_name)
+            if not folder_tokens:
+                continue
+
             scores = [
-                similarity(word, folder_word)
-                for word in words
-                for folder_word in folder_words
-                if len(folder_word) >= 3
+                max(
+                    similarity(word, folder_word),
+                    similarity(transliterate(word), folder_word),
+                    similarity(word, transliterate(folder_word)),
+                    similarity(transliterate(word), transliterate(folder_word)),
+                )
+                for word in query_tokens
+                for folder_word in folder_tokens
             ]
-            transliterated_words = [
-                transliterate(word)
-                for word in words
-                if re.search(r"[а-яіїєґ]", word)
-            ]
-            scores.extend(
-                similarity(word, folder_word)
-                for word in transliterated_words
-                for folder_word in folder_words
-                if len(folder_word) >= 3
-            )
             if scores:
                 ranked.append((max(scores), path))
 
         ranked.sort(key=lambda item: (-item[0], item[1].casefold()))
-        if not ranked or ranked[0][0] < 0.8:
+        if not ranked:
             return None
-        if len(ranked) > 1 and ranked[0][0] == ranked[1][0]:
+
+        top_score = ranked[0][0]
+        if len(ranked) > 1 and ranked[1][0] == top_score:
             return None
-        return ranked[0][1]
+
+        for score, path in ranked[:]:
+            threshold = (
+                0.5
+                if cls._contains_cyrillic(spoken_text)
+                != cls._contains_cyrillic(cls._explorer_folder_name(path))
+                else 0.8
+            )
+            if score >= threshold:
+                return path
+        return None
 
     def handle_open_close(self, text, is_open):
         match = APP_COMMAND_PATTERN.search(text)
