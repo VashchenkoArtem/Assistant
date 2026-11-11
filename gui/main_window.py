@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -94,8 +95,10 @@ QMainWindow, QWidget { background: #080e1d; color: #b5bdd4; font-family: 'Segoe 
 QToolButton.titleButton { border: none; background: transparent; color: #69718a; font-size: 12px; min-width: 40px; min-height: 48px; }
 QToolButton.titleButton:hover { background: #11182a; }
 #sidebar { background: #080d18; border-right: 1px solid #11182a; }
-QToolButton.sideButton { border: none; background: transparent; color: #747f9e; font-size: 16px; min-width: 56px; min-height: 56px; }
-QToolButton.sideButton:hover, QToolButton.sideButton:checked { background: #151e32; color: #d6daf0; border-radius: 8px; }
+QToolButton.sideButton { border: none; background: transparent; color: #aeb6cc; font-size: 12px; text-align: left; padding-left: 10px; min-height: 44px; border-radius: 8px; }
+QToolButton.sideButton:hover, QToolButton.sideButton:checked { background: #1a1a1a; color: #ffffff; }
+QToolButton.sidebarLogo { border: none; background: transparent; border-radius: 8px; text-align: left; padding-left: 12px; }
+QToolButton.sidebarLogo:hover { background: #151515; }
 #searchBar { background: #080d18; border-bottom: 1px solid #11182a; min-height: 58px; }
 #searchField { background: transparent; border: none; color: #77809a; padding-left: 8px; }
 #searchButton { border: none; background: transparent; color: #596178; }
@@ -147,6 +150,11 @@ class InitializationWorker(QRunnable):
         self.signals = InitializationSignals()
         self.result_command: object | None = None
         self.result_error: object | None = None
+        self._sidebar_expanded = False
+        self._sidebar = None
+        self._sidebar_buttons = []
+        self._sidebar_logo_button = None
+        self._body_splitter = None
 
     def run(self) -> None:
         sys_path = str(self.project_root)
@@ -473,33 +481,91 @@ class MainWindow(QMainWindow):
         sidebar.setMaximumWidth(220)
 
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(2, 12, 2, 8)
+        layout.setContentsMargins(0, 12, 0, 8)
         layout.setSpacing(6)
 
-        # Верхній блок лівої панелі: головна сторінка, налаштування, профіль.
+        # Кнопка логотипа для розгортання бічної панелі.
+        logo_button = QToolButton()
+        logo_button.setObjectName("sidebarLogo")
+        logo_button.setText("●")
+        logo_button.setAutoRaise(True)
+        logo_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        logo_button.setStyleSheet("""
+            QToolButton {
+                color: white;
+                font-size: 27px;
+                border: none;
+                background: transparent;
+                padding: 0px;
+                margin: 0px;
+            }
+            QToolButton:hover {
+                background: #151515;
+                border-radius: 8px;
+            }
+        """)
+        logo_button.setFixedSize(56, 56)
+        layout.addWidget(logo_button, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        # Основні розділи бічної панелі.
         sidebar_buttons = []
-        for icon_name, active in (("home.svg", True), ("user_ico.svg", False), ("settings.svg", False)):
+        for icon_name, title, active in (
+            ("home.svg", "Головна", True),
+            ("user_ico.svg", "Профіль", False),
+            ("settings.svg", "Налаштування", False),
+        ):
             button = QToolButton()
             button.setIcon(self.make_icon(icon_name, 22))
             button.setIconSize(QSize(24, 24))
             button.setObjectName("sideButton")
             button.setCheckable(True)
             button.setChecked(active)
+            button.setText("       " + title)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setStyleSheet("""
+                QToolButton {
+                    border: none;
+                    background: transparent;
+                    color: white;
+                    text-align: left;
+                    padding-left: 12px;
+                    padding-right: 8px;
+                }
+                QToolButton:hover {
+                    background-color: #303030;
+                    border: none;
+                }
+                QToolButton:checked {
+                    background-color: #383838;
+                    border: none;
+                }
+            """)
             button.setFixedSize(56, 56)
             layout.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
             sidebar_buttons.append(button)
 
+        # Перемикання активного розділу.
         for button in sidebar_buttons:
-            button.clicked.connect(lambda _checked=False, selected=button: self._select_sidebar_button(selected, sidebar_buttons))
+            button.clicked.connect(
+                lambda _checked=False, selected=button:
+                    self._select_sidebar_button(selected, sidebar_buttons)
+            )
 
-        # Знизу залишено лише компактний перемикач української та англійської мов.
+        # Перемикання стану бічної панелі.
+        logo_button.clicked.connect(
+            lambda: self._toggle_sidebar(sidebar, sidebar_buttons, logo_button)
+        )
+
+        # Перемикач мови в нижній частині панелі.
         layout.addStretch(1)
         language_button = QPushButton("УКР")
         language_button.setObjectName("languageButton")
         language_button.setFixedSize(56, 40)
 
         def toggle_language() -> None:
-            language_button.setText("ENG" if language_button.text() == "УКР" else "УКР")
+            language_button.setText(
+                "АНГ" if language_button.text() == "УКР" else "УКР"
+            )
 
         language_button.clicked.connect(toggle_language)
         layout.addWidget(language_button, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -820,3 +886,29 @@ class MainWindow(QMainWindow):
         self._drag_position = None
         if event is not None:
             event.accept()
+
+    def _toggle_sidebar(self, sidebar, sidebar_buttons, logo_button):
+        # Перемикання стану бічної панелі.
+        expanded = sidebar.width() <= 63
+        layout = sidebar.layout()
+
+        if expanded:
+            sidebar.setFixedWidth(220)
+
+            logo_button.setFixedSize(56, 56)
+            layout.setAlignment(logo_button, Qt.AlignmentFlag.AlignLeft)
+
+            for button in sidebar_buttons:
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+                button.setFixedSize(210, 56)
+                layout.setAlignment(button, Qt.AlignmentFlag.AlignLeft)
+        else:
+            sidebar.setFixedWidth(63)
+
+            logo_button.setFixedSize(56, 56)
+            layout.setAlignment(logo_button, Qt.AlignmentFlag.AlignHCenter)
+
+            for button in sidebar_buttons:
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+                button.setFixedSize(56, 56)
+                layout.setAlignment(button, Qt.AlignmentFlag.AlignHCenter)
