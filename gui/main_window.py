@@ -1,20 +1,8 @@
-import contextlib
-import io
-import os
-import sys
-import threading
-from datetime import datetime
-from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from PyQt6.QtCore import QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, pyqtSignal
-from PyQt6.QtGui import QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPixmap, QResizeEvent, QKeySequence, QShortcut
-from PyQt6.QtSvg import QSvgRenderer
+from PyQt6.QtCore import QPoint, Qt, QThreadPool
+from PyQt6.QtGui import QKeySequence, QMouseEvent, QShortcut
 from PyQt6.QtWidgets import (
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
     QMainWindow,
     QPushButton,
     QScrollArea,
@@ -22,10 +10,10 @@ from PyQt6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
-    QTextEdit,
-    QSplitter,
 )
 
+from .styles import STYLESHEET
+from .widgets.chat_panel import ChatPanel
 from .widgets.chat_widgets import ChatCard
 from utils.voicing_answer import GUI_TEXT_MODE
 
@@ -250,7 +238,9 @@ class VoiceWorker(QRunnable):
 
 
 class MainWindow(QMainWindow):
-    """Main application window matching the assistant desktop prototype."""
+    """Coordinates the window components and assistant command state."""
+
+    BACKEND_URL = "http://127.0.0.1:8765"
 
     def __init__(self, command: Any | None = None) -> None:
         super().__init__()
@@ -262,210 +252,72 @@ class MainWindow(QMainWindow):
 
         self._drag_position: QPoint | None = None
         self._command_busy = False
-        self._chat_layout: QVBoxLayout | None = None
-        self._chat_scroll: QScrollArea | None = None
+        self._command_queue: list[tuple[str, bool]] = []
         self._thread_pool = QThreadPool(self)
-        self._command_error: str | None = None
         self._voice_busy = False
+        self._voice_worker: VoiceWorker | None = None
         self._voice_status_card: ChatCard | None = None
         self._voice_stopped_card: ChatCard | None = None
-        self._voice_worker: VoiceWorker | None = None
-        self._mic_button: QPushButton | None = None
-        self._prompt_input: QTextEdit | None = None
-        self._keyboard_button: QPushButton | None = None
-        self._search_field: QLineEdit | None = None
-        self._microphone_shortcut: QShortcut | None = None
-        self._initialization_worker: InitializationWorker | None = None
-        self._initialization_thread: threading.Thread | None = None
+        self._initialization_worker: BackendHealthWorker | None = None
         self._initialization_status_card: ChatCard | None = None
-        self._initializing = command is None
-        self._command = command
+        self._initializing = True
+
+        self.chat = ChatPanel()
+        self.search = SearchBar()
+        self.composer = Composer()
         self._build_ui()
+
+        self.search.submitted.connect(self.send_message)
+        self.composer.submitted.connect(self.send_message)
+        self.search.microphone_requested.connect(self.start_microphone_input)
+        self.composer.microphone_requested.connect(self.start_microphone_input)
+
         shortcut = QShortcut(QKeySequence("Ctrl+M"), self)
         shortcut.activated.connect(self.start_microphone_input)
         self._microphone_shortcut = shortcut
 
-        if self._command is not None:
-            self._add_chat_card(
-                "Поліна",
-                "Привіт! Напишіть команду або натисніть кнопку микрофона.",
-            )
-
-        if self._command is None:
-            self._initialization_status_card = self._add_chat_card(
-                "System",
-                "Асистент ініціалізується...",
-                status="Initializing",
-            )
-            self._set_commands_enabled(False)
-            project_root = Path(__file__).resolve().parent.parent
-            initialization_worker = InitializationWorker(project_root)
-            initialization_worker.signals.finished.connect(self._command_initialized)
-            self._initialization_worker = initialization_worker
-            initialization_thread = threading.Thread(
-                target=initialization_worker.run,
-                name="assistant-initialization",
-                daemon=True,
-            )
-            self._initialization_thread = initialization_thread
-            initialization_thread.start()
-
-    def _create_command(self) -> Any:
-        project_root = Path(__file__).resolve().parent.parent
-        sys.path.insert(0, str(project_root))
-        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "Assistant.settings")
-
-        try:
-            import django
-
-            django.setup()
-            from core.management.commands.run_assistant import Command
-
-            command = Command()
-            if hasattr(command, "initialize_for_text"):
-                command.initialize_for_text()
-                return command
-        except Exception as error:
-            self._command_error = str(error)
-            return None
-        return None
-
-    def _command_initialized(self, command: object, error: object) -> None:
-        self._initializing = False
-        if command is not None:
-            self._command = cast(Any, command)
-            self._command_error = None
-            self._remove_initialization_status_card()
-            self._set_commands_enabled(True)
-            self._add_chat_card(
-                "Поліна",
-                "Привіт! Напишіть команду або натисніть кнопку микрофона.",
-            )
-            return
-
-        self._command = None
-        self._command_error = str(error) if error else "Не вдалося ініціалізувати асистента."
-        self._remove_initialization_status_card()
+        self._initialization_status_card = self._add_chat_card(
+            "System",
+            "Підключення до асистента...",
+            status="Initializing",
+        )
         self._set_commands_enabled(False)
+        self._initialization_worker = BackendHealthWorker(self.BACKEND_URL)
+        self._initialization_worker.signals.finished.connect(self._backend_initialized)
+        self._thread_pool.start(self._initialization_worker)
 
-    # ============================ РОБОТА З ІКОНКАМИ ============================
-    def icon_path(self, name: str) -> Path:
-        assets = Path(__file__).parent / "assets"
-        png_path = assets / "png" / f"{Path(name).stem}.png"
-        if png_path.exists():
-            return png_path
-        return assets / name
-
-    def make_icon(self, name: str, size: int = 20) -> QIcon:
-        pixmap = self.make_pixmap(name, size)
-        return QIcon(pixmap)
-
-    def make_pixmap(self, name: str, size: int) -> QPixmap:
-        path = self.icon_path(name)
-        if path.suffix.lower() == ".svg":
-            renderer = QSvgRenderer(str(path))
-            if not renderer.isValid():
-                return QPixmap()
-            canvas_size = max(size * 4, 64)
-            image = QImage(canvas_size, canvas_size, QImage.Format.Format_ARGB32)
-            image.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(image)
-            renderer.render(painter)
-            painter.end()
-            pixmap = QPixmap.fromImage(image)
-        else:
-            pixmap = QPixmap(str(path))
-
-        if pixmap.isNull():
-            return QPixmap()
-
-        image = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
-        rect = image.size().boundedTo(QSize(image.width(), image.height()))
-        left, top, right, bottom = rect.width(), rect.height(), -1, -1
-        for y in range(rect.height()):
-            for x in range(rect.width()):
-                if image.pixelColor(x, y).alpha() >= 24:
-                    left = min(left, x)
-                    top = min(top, y)
-                    right = max(right, x)
-                    bottom = max(bottom, y)
-
-        if right >= left and bottom >= top:
-            pixmap = QPixmap.fromImage(image.copy(left, top, right - left + 1, bottom - top + 1))
-
-        return pixmap.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-
-    # ============================ ОСНОВНА КОМПОНОВКА ВІКНА ============================
     def _build_ui(self) -> None:
         root = QWidget()
         root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
-
-        root_layout.addWidget(self._create_title_bar())
+        root_layout.addWidget(
+            TitleBar(
+                minimize_callback=self.showMinimized,
+                maximize_callback=self.toggle_maximize,
+                close_callback=self.close,
+            )
+        )
 
         body = QSplitter(Qt.Orientation.Horizontal)
         body.setHandleWidth(4)
         body.setChildrenCollapsible(False)
-        body.addWidget(self._create_sidebar())
-        body.addWidget(self._create_main_panel())
+        body.addWidget(Sidebar())
+
+        main_panel = QWidget()
+        main_layout = QVBoxLayout(main_panel)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        main_layout.addWidget(self.search)
+        main_layout.addWidget(self.chat, 1)
+        main_layout.addWidget(self.composer)
+        body.addWidget(main_panel)
         body.setStretchFactor(0, 0)
         body.setStretchFactor(1, 1)
         body.setSizes([63, 845])
         root_layout.addWidget(body, 1)
 
         self.setCentralWidget(root)
-
-    # ============================ ВЕРХНЯ ПАНЕЛЬ / TITLE BAR ============================
-    def _create_title_bar(self) -> QWidget:
-        bar = QFrame()
-        bar.setObjectName("titleBar")
-        bar.setFixedHeight(49)
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(12, 0, 5, 0)
-        layout.setSpacing(8)
-        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        # Верхня ліва частина без окремого фонового прямокутника.
-        brand_icon = QLabel()
-        brand_icon.setPixmap(self.make_pixmap("logo_assistant.svg", 22))
-        brand_icon.setFixedWidth(28)
-        brand_icon.setStyleSheet("background: transparent; border: none;")
-        layout.addWidget(brand_icon)
-
-        brand = QLabel("Поліна")
-        brand.setObjectName("brand")
-        brand.setStyleSheet("background: transparent; border: none;")
-        layout.addWidget(brand)
-
-        # Права група керування вікном: повноформатні кнопки на всю висоту заголовка.
-        actions = QWidget()
-        actions.setFixedSize(132, 49)
-        actions.setStyleSheet("background: transparent; border: none;")
-        actions_layout = QHBoxLayout(actions)
-        actions_layout.setContentsMargins(0, 0, 0, 0)
-        actions_layout.setSpacing(4)
-
-        title_actions = (
-            ("hide_window.svg", self.showMinimized),
-            ("full_window.svg", self.toggle_maximize),
-            ("close_winow.svg", self.close),
-        )
-        for icon_name, callback in title_actions:
-            button = QToolButton()
-            button.setIcon(self.make_icon(icon_name, 40))
-            button.setIconSize(QSize(40, 49))
-            button.setFixedSize(40, 49)
-            button.setProperty("class", "titleButton")
-            button.setStyleSheet(
-                "QToolButton { border: none; background: transparent; }"
-                "QToolButton:hover { background: transparent; }"
-            )
-            button.clicked.connect(callback)
-            actions_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        layout.addWidget(actions, 0, Qt.AlignmentFlag.AlignVCenter)
-        return bar
 
     def toggle_maximize(self) -> None:
         if self.isMaximized():
@@ -614,55 +466,27 @@ class MainWindow(QMainWindow):
         is_user: bool = False,
         status: str | None = None,
     ) -> ChatCard:
-        if self._chat_layout is None:
-            raise RuntimeError("Chat area is not initialized")
+        return self.chat.add_card(author, body, is_user=is_user, status=status)
 
-        icon_name = "user_ico.svg" if is_user else "bot_ico.svg"
-        if author == "System":
-            icon_name = "info.svg"
-        card = ChatCard(
-            author,
-            body.strip(),
-            datetime.now().strftime("%H:%M"),
-            str(self.icon_path(icon_name)),
-            is_user=is_user,
-            status=status,
-            status_icon=str(self.icon_path("status.svg")) if status else None,
-        )
-        insert_at = max(0, self._chat_layout.count() - 1)
-        self._chat_layout.insertWidget(insert_at, card)
-        self._scroll_chat_to_bottom()
-        return card
-
-    def _scroll_chat_to_bottom(self) -> None:
-        if self._chat_scroll is None:
+    def _remove_chat_card(self, card: ChatCard | None) -> None:
+        if card is None:
             return
-
-        if self._chat_layout is not None:
-            self._chat_layout.activate()
-        scrollbar = self._chat_scroll.verticalScrollBar()
-        if scrollbar is not None:
-            scrollbar.setValue(scrollbar.maximum())
-            QTimer.singleShot(0, lambda: scrollbar.setValue(scrollbar.maximum()))
-            QTimer.singleShot(50, lambda: scrollbar.setValue(scrollbar.maximum()))
-            QTimer.singleShot(150, lambda: scrollbar.setValue(scrollbar.maximum()))
+        self.chat.chat_layout.removeWidget(card)
+        card.setParent(None)
+        card.deleteLater()
 
     def send_message(
         self,
         text: str,
-        clear_prompt: QTextEdit | None = None,
-        clear_search: QLineEdit | None = None,
+        clear_prompt: Any | None = None,
+        clear_search: Any | None = None,
         speak_answer: bool = False,
     ) -> None:
-        """Send a text command through the same command engine used by voice input."""
         text = text.strip()
         if not text:
             return
         if self._initializing:
-            self._add_chat_card(
-                "System",
-                "Зачекайте, асистент ще ініціалізується.",
-            )
+            self._add_chat_card("System", "Зачекайте, асистент ще ініціалізується.")
             return
         if clear_prompt is not None:
             clear_prompt.clear()
@@ -671,19 +495,15 @@ class MainWindow(QMainWindow):
 
         self._remove_voice_stopped_card()
         self._add_chat_card("User", text, is_user=True)
-        if self._command is None:
-            detail = f" Причина: {self._command_error}" if self._command_error else ""
-            self._add_chat_card(
-                "System",
-                "Асистент не зміг ініціалізуватися. Перевірте Django та встановлені залежності." + detail,
-            )
-            return
         if self._command_busy:
-            self._add_chat_card("System", "Зачекайте, попередню команду ще обробляю.")
+            self._command_queue.append((text, speak_answer))
             return
 
+        self._start_command(text, speak_answer)
+
+    def _start_command(self, text: str, speak_answer: bool = False) -> None:
         self._command_busy = True
-        worker = CommandWorker(self._command, text, speak_answer=speak_answer)
+        worker = CommandWorker(self.BACKEND_URL, text, speak_answer=speak_answer)
         worker.signals.finished.connect(self._command_finished)
         worker.signals.error.connect(self._command_failed)
         self._thread_pool.start(worker)
@@ -698,10 +518,18 @@ class MainWindow(QMainWindow):
         ]
         if lines:
             self._add_chat_card("Поліна", "\n".join(lines))
+        self._start_next_queued_command()
 
     def _command_failed(self, message: str) -> None:
         self._command_busy = False
         self._add_chat_card("System", f"Помилка виконання команди: {message}")
+        self._start_next_queued_command()
+
+    def _start_next_queued_command(self) -> None:
+        if self._command_busy or not self._command_queue:
+            return
+        text, speak_answer = self._command_queue.pop(0)
+        self._start_command(text, speak_answer)
 
     def start_microphone_input(self) -> None:
         if self._initializing:
@@ -711,7 +539,7 @@ class MainWindow(QMainWindow):
             return
         self._remove_voice_stopped_card()
         self._voice_busy = True
-        self._set_microphone_icon(active=True)
+        self.composer.set_microphone_active(True)
         self._voice_status_card = self._add_chat_card(
             "System",
             "Слухаю вас...",
@@ -727,7 +555,7 @@ class MainWindow(QMainWindow):
             self._voice_worker.stop()
         self._voice_worker = None
         self._voice_busy = False
-        self._set_microphone_icon(active=False)
+        self.composer.set_microphone_active(False)
         self._remove_voice_status_card()
         self._remove_voice_stopped_card()
         self._voice_stopped_card = self._add_chat_card(
@@ -742,143 +570,39 @@ class MainWindow(QMainWindow):
     def _voice_failed(self, message: str) -> None:
         self._voice_busy = False
         self._voice_worker = None
-        self._set_microphone_icon(active=False)
+        self.composer.set_microphone_active(False)
         self._remove_voice_status_card()
         self._add_chat_card("System", f"Не вдалося розпізнати голос: {message}")
 
     def _remove_voice_status_card(self) -> None:
-        if self._voice_status_card is None:
-            return
-        if self._chat_layout is not None:
-            self._chat_layout.removeWidget(self._voice_status_card)
-        self._voice_status_card.setParent(None)
-        self._voice_status_card.deleteLater()
+        self._remove_chat_card(self._voice_status_card)
         self._voice_status_card = None
 
     def _remove_voice_stopped_card(self) -> None:
-        if self._voice_stopped_card is None:
-            return
-        if self._chat_layout is not None:
-            self._chat_layout.removeWidget(self._voice_stopped_card)
-        self._voice_stopped_card.setParent(None)
-        self._voice_stopped_card.deleteLater()
+        self._remove_chat_card(self._voice_stopped_card)
         self._voice_stopped_card = None
 
     def _remove_initialization_status_card(self) -> None:
-        if self._initialization_status_card is None:
-            return
-        if self._chat_layout is not None:
-            self._chat_layout.removeWidget(self._initialization_status_card)
-        self._initialization_status_card.setParent(None)
-        self._initialization_status_card.deleteLater()
+        self._remove_chat_card(self._initialization_status_card)
         self._initialization_status_card = None
 
     def _set_commands_enabled(self, enabled: bool) -> None:
-        if self._prompt_input is not None:
-            self._prompt_input.setEnabled(enabled)
-        if self._search_field is not None:
-            self._search_field.setEnabled(enabled)
-        if self._keyboard_button is not None:
-            self._keyboard_button.setEnabled(enabled)
-        if self._mic_button is not None:
-            self._mic_button.setEnabled(enabled)
+        self.search.setEnabled(enabled)
+        self.composer.set_prompt_enabled(enabled)
 
-    def _set_microphone_icon(self, active: bool) -> None:
-        if self._mic_button is None:
-            return
-        icon_name = "micro.svg" if active else "micro_off.svg"
-        self._mic_button.setIcon(self.make_icon(icon_name, 20))
-
-    # ============================ РЯДОК ПОШУКУ НАД ЧАТОМ ============================
-    def _create_search_bar(self) -> QWidget:
-        bar = QWidget()
-        bar.setObjectName("searchBar")
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(23, 8, 12, 8)
-        layout.setSpacing(10)
-
-        # Іконка пошуку ліворуч у рядку пошуку.
-        search_icon = QLabel()
-        search_icon.setPixmap(self.make_pixmap("search.svg", 16))
-        layout.addWidget(search_icon)
-
-        search = QLineEdit()
-        search.setObjectName("searchField")
-        search.setPlaceholderText("Search files, repositories, or start speaking")
-        search.setFixedHeight(42)
-        search.returnPressed.connect(lambda: self.send_message(search.text(), clear_search=search))
-        self._search_field = search
-        layout.addWidget(search, 1)
-
-        filter_button = QPushButton("Ctrl + M")
-        filter_button.setObjectName("searchButton")
-        filter_button.clicked.connect(self.start_microphone_input)
-        layout.addWidget(filter_button)
-        return bar
-
-    # ============================ НИЖНЯ ПАНЕЛЬ ВВЕДЕННЯ ============================
-    def _create_composer(self) -> QWidget:
-        # Нижня панель вводу має динамічно зростати разом із текстом.
-        area = QWidget()
-        area.setObjectName("composerArea")
-
-        layout = QVBoxLayout(area)
-        layout.setContentsMargins(16, 12, 16, 10)
-        layout.setSpacing(9)
-        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        area.setMaximumHeight(300)
-
-        composer = QFrame()
-        composer.setObjectName("composer")
-        composer_layout = QHBoxLayout(composer)
-        composer_layout.setContentsMargins(12, 4, 12, 4)
-        composer_layout.setSpacing(8)
-
-        # Ліва кнопка системної дієї прив’язана до нижнього краю поля.
-        keyboard = QPushButton()
-        keyboard.setIcon(self.make_icon("system_enter.svg", 20))
-        keyboard.setIconSize(QSize(20, 20))
-        keyboard.setObjectName("keyboardButton")
-        keyboard.setFixedSize(32, 32)
-        keyboard.clicked.connect(lambda: self.send_message(prompt.toPlainText(), clear_prompt=prompt))
-        self._keyboard_button = keyboard
-        composer_layout.addWidget(keyboard, 0, Qt.AlignmentFlag.AlignBottom)
-
-        # Багаторядкове поле автоматично розширює composer, але прокручується після max-height.
-        prompt = AutoResizeTextEdit()
-        prompt.submitted.connect(lambda: self.send_message(prompt.toPlainText(), clear_prompt=prompt))
-        self._prompt_input = prompt
-        composer_layout.addWidget(prompt, 1, Qt.AlignmentFlag.AlignVCenter)
-
-        mic = QPushButton()
-        mic.setIcon(self.make_icon("micro_off.svg", 20))
-        mic.setIconSize(QSize(20, 20))
-        mic.setObjectName("micButton")
-        mic.setFixedSize(32, 32)
-        mic.clicked.connect(self.start_microphone_input)
-        self._mic_button = mic
-        composer_layout.addWidget(mic, 0, Qt.AlignmentFlag.AlignBottom)
-
-        layout.addWidget(composer, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        def resize_composer_area() -> None:
-            input_height = prompt.height()
-            composer_height = max(50, input_height + 8)
-            composer.setFixedHeight(composer_height)
-            area.updateGeometry()
-
-        prompt.textChanged.connect(resize_composer_area)
-        resize_composer_area()
-        return area
-
-    # ============================ ПЕРЕТЯГУВАННЯ ВІКНА ============================
     def mousePressEvent(self, event: QMouseEvent | None) -> None:
         if event is not None and event.button() == Qt.MouseButton.LeftButton:
-            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._drag_position = (
+                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            )
             event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent | None) -> None:
-        if event is not None and self._drag_position is not None and event.buttons() == Qt.MouseButton.LeftButton:
+        if (
+            event is not None
+            and self._drag_position is not None
+            and event.buttons() == Qt.MouseButton.LeftButton
+        ):
             self.move(event.globalPosition().toPoint() - self._drag_position)
             event.accept()
 

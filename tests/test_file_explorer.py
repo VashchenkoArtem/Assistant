@@ -14,10 +14,13 @@ from core.management.commands.run_assistant import Command
 from core.response_analysis import ResponseAnalysis, ResponseCategory, ResponseSource
 from utils.file_explorer import (
     ExplorerTab,
+    ExplorerWindow,
+    close_explorer_window,
     close_explorer_tab,
     close_explorer_windows,
     find_open_explorer_folders,
     get_open_explorer_tabs,
+    get_open_explorer_windows,
     find_file_targets,
     find_file_targets_in_folder,
     find_similar_file_targets,
@@ -154,7 +157,10 @@ def test_open_target_launches_windows_settings(monkeypatch):
 def test_document_folder_alias_accepts_inflected_forms(monkeypatch, spoken_folder):
     documents_path = r"C:\Users\test\Documents"
     resolve_folder = Mock(return_value=documents_path)
-    monkeypatch.setattr("utils.file_explorer._standard_folder_path", resolve_folder)
+    monkeypatch.setattr(
+        "utils.file_explorer.targets._standard_folder_path",
+        resolve_folder,
+    )
 
     assert find_file_targets(spoken_folder, expected_kind="folder") == [documents_path]
     resolve_folder.assert_called_once_with("Documents")
@@ -179,6 +185,23 @@ def test_find_similar_file_targets_suggests_close_file_names(tmp_path):
     ) == [str(target)]
 
 
+def test_find_similar_file_targets_matches_cyrillic_and_latin_folder_names(tmp_path):
+    target = tmp_path / "Codex"
+    target.mkdir()
+
+    assert find_similar_file_targets(
+        "кодекс",
+        roots=[str(tmp_path)],
+        expected_kind="folder",
+    ) == [str(target)]
+
+
+def test_match_explorer_folder_name_accepts_cross_script_name(tmp_path):
+    targets = [str(tmp_path / "Alpha"), str(tmp_path / "Codex")]
+
+    assert Command._match_explorer_folder_name("кодекс", targets) == targets[1]
+
+
 def test_similar_folder_search_includes_standard_folder_alias(tmp_path, monkeypatch):
     documents = tmp_path / "Documents"
     music = tmp_path / "Music"
@@ -190,7 +213,7 @@ def test_similar_folder_search_includes_standard_folder_alias(tmp_path, monkeypa
         "Music": str(music),
     }
     monkeypatch.setattr(
-        "utils.file_explorer._standard_folder_path",
+        "utils.file_explorer.targets._standard_folder_path",
         lambda name: standard_folders.get(name),
     )
 
@@ -211,7 +234,10 @@ def test_similar_folder_search_excludes_short_names_that_match_any_substring(
         (tmp_path / parent / "C#").mkdir(parents=True)
     telegram_desktop = tmp_path / "Downloads" / "Telegram Desktop"
     telegram_desktop.mkdir(parents=True)
-    monkeypatch.setattr("utils.file_explorer._standard_folder_path", lambda _name: None)
+    monkeypatch.setattr(
+        "utils.file_explorer.targets._standard_folder_path",
+        lambda _name: None,
+    )
 
     suggestions = find_similar_file_targets(
         "Telegram Tech",
@@ -346,12 +372,32 @@ def test_folder_opens_in_new_tab_of_existing_explorer_window(tmp_path):
 
     assert run.call_args.kwargs["env"]["ASSISTANT_EXPLORER_TARGET"] == str(folder)
     script = run.call_args.args[0][-1]
-    assert "SendShortcut(0x54)" in script
-    assert "SendShortcut(0x4C)" in script
-    assert "SendShortcut(0x41)" in script
-    assert "TypeText($env:ASSISTANT_EXPLORER_TARGET)" in script
-    assert "Navigate2" not in script
+    assert "$target = $env:ASSISTANT_EXPLORER_TARGET" in script
+    assert "[AssistantExplorerWindow]::GetAncestor(" in script
+    assert "$invokePattern.Invoke()" in script
+    assert "$newWindow.Navigate2($target)" in script
+    assert "$existingComIds.ContainsKey($identity)" in script
+    assert "'AddButton'" in script
+    assert "Add New Tab" in script
+    assert "Navigate2($target, 0x0800)" not in script
+    assert "TypeText" not in script
     popen.assert_not_called()
+
+
+def test_open_folder_reports_generic_error_without_powerShell_details():
+    command = make_command()
+    technical_error = "Не вдалося знайти кнопку створення вкладки Провідника."
+    with (
+        patch.object(run_assistant, "open_target", side_effect=RuntimeError(technical_error)),
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+        patch.object(run_assistant.logger, "warning") as warning,
+        patch.object(command.stdout, "write") as write,
+    ):
+        command.open_file_target(r"C:\Users\test\Videos")
+
+    answer.assert_called_once_with("Не вдалося відкрити Videos.")
+    write.assert_not_called()
+    warning.assert_called_once_with("Opening target failed: %s", "RuntimeError")
 
 
 def test_music_alias_resolves_to_music_folder_not_home(monkeypatch, tmp_path):
@@ -518,23 +564,127 @@ def test_close_explorer_reports_when_there_are_no_open_windows():
     assert "Відкритих вікон" in speak.call_args.args[0]
 
 
+def test_close_all_explorer_windows_command_without_listing():
+    command = make_command()
+    with (
+        patch.object(run_assistant, "close_explorer_windows", return_value=2) as close_all,
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+    ):
+        command.doing_task("закрий всі вікна")
+
+    close_all.assert_called_once_with()
+    assert answer.call_args.args[0] == "Закрила вікна Провідника. Закрито вікон: 2."
+
+
+@pytest.mark.parametrize(
+    "spoken_text",
+    [
+        "закрий всі папки",
+        "закрити усі відкриті папки",
+        "закривай всі вкладки",
+        "закрити всі вкладки у Провіднику",
+    ],
+)
+def test_close_all_explorer_folders_command(spoken_text):
+    command = make_command()
+    with (
+        patch.object(
+            run_assistant, "close_explorer_windows", return_value=3
+        ) as close_windows,
+        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+    ):
+        command.doing_task(spoken_text)
+
+    close_windows.assert_called_once_with()
+    speak.assert_called_once_with(
+        "Закрила всі відкриті папки. Закрито вкладок: 3."
+    )
+
+
+def test_close_all_explorer_folders_reports_empty_list():
+    command = make_command()
+    with (
+        patch.object(run_assistant, "close_explorer_windows", return_value=0),
+        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+    ):
+        command.doing_task("закрий всі папки")
+
+    speak.assert_called_once_with("У Провіднику немає відкритих папок.")
+
+
+def test_close_all_explorer_folders_hides_technical_error():
+    command = make_command()
+    with (
+        patch.object(
+            run_assistant,
+            "close_explorer_windows",
+            side_effect=RuntimeError("PowerShell raw error"),
+        ),
+        patch.object(run_assistant, "voicing_and_printing_answer") as speak,
+        patch.object(run_assistant.logger, "warning") as warning,
+        patch.object(command.stdout, "write") as write,
+    ):
+        command.doing_task("закрий всі папки")
+
+    speak.assert_called_once_with("Не вдалося закрити відкриті папки Провідника.")
+    warning.assert_called_once_with(
+        "Closing all Explorer folders failed: %s", "RuntimeError"
+    )
+    write.assert_not_called()
+
+
 def test_close_explorer_windows_only_closes_explorer_windows():
-    completed = Mock(returncode=0, stdout="2\n", stderr="")
     with (
         patch("utils.file_explorer.platform.system", return_value="Windows"),
-        patch("utils.file_explorer.subprocess.run", return_value=completed) as run,
+        patch(
+            "utils.file_explorer.windows._run_explorer_script",
+            return_value="2",
+        ) as run_script,
     ):
         assert close_explorer_windows() == 2
 
-    assert "explorer.exe" in run.call_args.args[0][-1]
-    assert "window.Quit()" in run.call_args.args[0][-1]
-    assert "Stop-Process" not in run.call_args.args[0][-1]
+    script = run_script.call_args.args[0]
+    assert "explorer.exe" in script
+    assert "Select-Object -Unique" in script
+    assert "PostMessage" in script
+    assert "0x0010" in script
+    assert "Stop-Process" not in script
+
+
+def test_get_open_explorer_windows_groups_tabs_by_hwnd():
+    tabs = [
+        ExplorerTab(r"C:\Users\test\Videos", "Videos", 100, 0),
+        ExplorerTab(r"C:\Users\test\Documents", "Documents", 100, 1),
+        ExplorerTab(r"C:\Users\test\Downloads", "Downloads", 200, 0),
+    ]
+    with patch(
+        "utils.file_explorer.windows.get_open_explorer_tabs",
+        return_value=tabs,
+    ):
+        assert get_open_explorer_windows() == [
+            ExplorerWindow(100, tuple(tabs[:2])),
+            ExplorerWindow(200, (tabs[2],)),
+        ]
+
+
+def test_close_explorer_window_posts_close_for_matching_explorer_hwnd():
+    with patch(
+        "utils.file_explorer.windows._run_explorer_script_with_env",
+        return_value="closed",
+    ) as run_script:
+        assert close_explorer_window(100) is True
+
+    script, env = run_script.call_args.args
+    assert env == {"ASSISTANT_EXPLORER_HWND": "100"}
+    assert "[int64]$_.HWND -eq $targetHwnd" in script
+    assert "[AssistantExplorerWindow]::PostMessage" in script
+    assert "0x0010" in script
 
 
 def test_active_explorer_path_is_read_from_selected_window():
     with (
         patch(
-            "utils.file_explorer._run_explorer_script",
+            "utils.file_explorer.windows._run_explorer_script",
             return_value=r"C:\Users\test\Documents",
         ) as run_script,
         patch("utils.file_explorer.platform.system", return_value="Windows"),
@@ -544,11 +694,43 @@ def test_active_explorer_path_is_read_from_selected_window():
         )
 
     script = run_script.call_args.args[0]
-    assert "matchingWindows.Count -gt 1" in script
+    assert "GetAncestor" in script
+    assert "$foregroundRoot" in script
+    assert "$targetRoot" in script
+    assert "matchingWindows.Count -eq 1" in script
     assert "AutomationIdProperty" in script
     assert "'TabView'" in script
     assert "SelectionItemPattern" in script
-    assert "$matchingWindows[$selectedTabIndex]" in script
+    assert "TryGetCurrentPattern" in script
+    assert "TreeScope]::Children" in script
+    assert script.index("TreeScope]::Children") < script.index(
+        "TreeScope]::Descendants"
+    )
+    assert "$window = $matchingWindows[0]" in script
+    assert "$matchingWindows[$selectedTabIndex]" not in script
+    assert "$candidateNames -contains $selectedTabName" in script
+    assert "$tabView = Get-ExplorerTabView $targetRoot" in script
+    assert "$window = $namedWindows[0]" in script
+    assert "fallbackToFirst" in script
+    assert "finally {" in script
+    assert "ReleaseComObject($shellWindow)" in script
+
+
+def test_active_explorer_path_handles_virtual_shell_locations():
+    with (
+        patch(
+            "utils.file_explorer.windows._run_explorer_script",
+            return_value="shell:Home",
+        ) as run_script,
+        patch("utils.file_explorer.platform.system", return_value="Windows"),
+    ):
+        assert get_active_explorer_path() == "shell:Home"
+
+    script = run_script.call_args.args[0]
+    assert "$document = $window.Document" in script
+    assert "if ($document)" in script
+    assert "$window.LocationURL" in script
+    assert '$path = "shell:$locationName"' in script
 
 
 def test_active_explorer_subfolders_are_sorted(tmp_path):
@@ -557,7 +739,7 @@ def test_active_explorer_subfolders_are_sorted(tmp_path):
     (tmp_path / "not-a-folder.txt").touch()
 
     with patch(
-        "utils.file_explorer.get_active_explorer_path",
+        "utils.file_explorer.windows.get_active_explorer_path",
         return_value=str(tmp_path),
     ):
         assert get_active_explorer_subfolders() == [
@@ -571,7 +753,7 @@ def test_active_explorer_subfolders_include_entries_after_the_eighth(tmp_path):
         (tmp_path / f"Folder {index}").mkdir()
 
     with patch(
-        "utils.file_explorer.get_active_explorer_path",
+        "utils.file_explorer.windows.get_active_explorer_path",
         return_value=str(tmp_path),
     ):
         folders = get_active_explorer_subfolders()
@@ -585,12 +767,12 @@ def test_active_explorer_virtual_folder_subfolders_come_from_shell_items():
     namespace_path = "::{F874310E-B6B7-47DC-BC84-B9E6B38F5903}"
     with (
         patch(
-            "utils.file_explorer.get_active_explorer_path",
+            "utils.file_explorer.windows.get_active_explorer_path",
             return_value=namespace_path,
         ),
         patch("utils.file_explorer.os.path.isdir", return_value=False),
         patch(
-            "utils.file_explorer._run_explorer_script",
+            "utils.file_explorer.windows._run_explorer_script",
             return_value='["D:\\\\", "C:\\\\"]',
         ) as run_script,
     ):
@@ -598,18 +780,19 @@ def test_active_explorer_virtual_folder_subfolders_come_from_shell_items():
 
     assert folders == ["C:\\", "D:\\"]
     script = run_script.call_args.args[0]
-    assert "$window.Document.Folder.Items()" in script
+    assert "$document.Folder.Items()" in script
+    assert "Не вдалося отримати вміст активної вкладки" in script
     assert "$_.IsFolder" in script
 
 
 def test_active_explorer_virtual_folder_without_subfolders_returns_empty_list():
     with (
         patch(
-            "utils.file_explorer.get_active_explorer_path",
+            "utils.file_explorer.windows.get_active_explorer_path",
             return_value="::{F874310E-B6B7-47DC-BC84-B9E6B38F5903}",
         ),
         patch("utils.file_explorer.os.path.isdir", return_value=False),
-        patch("utils.file_explorer._run_explorer_script", return_value="[]"),
+        patch("utils.file_explorer.windows._run_explorer_script", return_value="[]"),
     ):
         assert get_active_explorer_subfolders() == []
 
@@ -630,23 +813,365 @@ def test_virtual_drive_folder_name_uses_drive_label():
     assert Command._explorer_folder_name("C:\\") == "C:"
 
 
-def test_navigate_explorer_back_calls_shell_back():
+@pytest.mark.parametrize(
+    "spoken_text",
+    [
+        "Які папки відкриті?",
+        "Які вкладки зараз відкриті у Провіднику?",
+        "Покажи відкриті папки",
+        "Показати відкриті папки",
+        "Відкриті папки",
+        "Покажи список відкритих папок",
+        "Перелічи мені відкриті вкладки",
+        "Список відкритих папок у Провіднику",
+    ],
+)
+def test_open_explorer_tabs_command_shows_names_and_paths(spoken_text):
+    tabs = [
+        ExplorerTab(r"C:\Users\test\Downloads", "Завантаження", 100, 0),
+        ExplorerTab(r"C:\Users\test\Documents", "Документи", 200, 0),
+    ]
+    command = make_command()
+
+    with (
+        patch.object(run_assistant, "get_open_explorer_tabs", return_value=tabs),
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+    ):
+        command.doing_task(spoken_text)
+
+    answer.assert_called_once_with(
+        "Відкриті папки у Провіднику:\n"
+        "1. Завантаження — C:\\Users\\test\\Downloads\n"
+        "2. Документи — C:\\Users\\test\\Documents\n"
+        "Що зробити з відкритими вкладками? Назвіть номер вкладки, "
+        "яку потрібно закрити, або скажіть, що залишити все як є."
+    )
+
+
+@pytest.mark.parametrize(
+    "spoken_text",
+    [
+        "Покажи відкриті вікна",
+        "Показати список відкритих вікон у Провіднику",
+        "Покажи список наявних вікон",
+        "Покажи всі відкриті вікна",
+        "Які вікна зараз відкриті",
+    ],
+)
+def test_open_explorer_windows_command_lists_window_tabs(spoken_text):
+    windows = [
+        ExplorerWindow(
+            100,
+            (
+                ExplorerTab(r"C:\Users\test\Videos", "Videos", 100, 0),
+                ExplorerTab(r"C:\Users\test\Documents", "Documents", 100, 1),
+            ),
+        ),
+        ExplorerWindow(
+            200,
+            (ExplorerTab("shell:Home", "Главная", 200, 0),),
+        ),
+    ]
+    command = make_command()
+    with (
+        patch.object(
+            run_assistant, "get_open_explorer_windows", return_value=windows
+        ) as get_windows,
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+    ):
+        command.doing_task(spoken_text)
+
+    get_windows.assert_called_once_with()
+    answer.assert_called_once_with(
+        "Відкриті вікна Провідника:\n"
+        "1. Videos — C:\\Users\\test\\Videos, Documents — C:\\Users\\test\\Documents\n"
+        "2. Главная\n"
+        "Назвіть номер вікна, яке закрити, або скажіть «закрити всі»."
+    )
+    assert command.pending_explorer_windows == windows
+
+
+def test_close_selected_explorer_window_from_list():
+    windows = [
+        ExplorerWindow(100, (ExplorerTab(r"C:\Users\test\Videos", "Videos", 100, 0),)),
+        ExplorerWindow(
+            200,
+            (ExplorerTab(r"C:\Users\test\Documents", "Documents", 200, 0),),
+        ),
+    ]
+    command = make_command()
+    with (
+        patch.object(run_assistant, "get_open_explorer_windows", return_value=windows),
+        patch.object(run_assistant, "close_explorer_window", return_value=True) as close_window,
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+    ):
+        command.doing_task("покажи відкриті вікна")
+        command.doing_task("закрий вікно 2")
+
+    close_window.assert_called_once_with(200)
+    assert command.pending_explorer_windows is None
+    assert answer.call_args.args[0] == "Закрила вибране вікно Провідника."
+
+
+def test_close_all_explorer_windows_from_list():
+    windows = [
+        ExplorerWindow(100, (ExplorerTab(r"C:\Users\test\Videos", "Videos", 100, 0),))
+    ]
+    command = make_command()
+    with (
+        patch.object(run_assistant, "get_open_explorer_windows", return_value=windows),
+        patch.object(run_assistant, "close_explorer_windows", return_value=1) as close_all,
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+    ):
+        command.doing_task("покажи відкриті вікна")
+        command.doing_task("закрити всі")
+
+    close_all.assert_called_once_with()
+    assert command.pending_explorer_windows is None
+    assert answer.call_args.args[0] == "Закрила вікна Провідника. Закрито вікон: 1."
+
+
+def test_other_command_clears_pending_explorer_window_selection():
+    windows = [
+        ExplorerWindow(100, (ExplorerTab(r"C:\Users\test\Videos", "Videos", 100, 0),))
+    ]
+    command = make_command()
+    with (
+        patch.object(run_assistant, "get_open_explorer_windows", return_value=windows),
+        patch.object(run_assistant, "close_explorer_window") as close_window,
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+    ):
+        command.doing_task("покажи відкриті вікна")
+        command.doing_task("привіт")
+
+    close_window.assert_not_called()
+    assert command.pending_explorer_windows is None
+    assert answer.call_args.args[0] == "Привіт, рада тебе бачити!"
+
+
+def test_open_explorer_tabs_command_hides_virtual_namespace_guid():
+    command = make_command()
+    home_tab = ExplorerTab(
+        "::{F874310E-B6B7-47DC-BC84-B9E6B38F5903}",
+        "Главная",
+        100,
+        0,
+    )
+    with (
+        patch.object(run_assistant, "get_open_explorer_tabs", return_value=[home_tab]),
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+    ):
+        command.doing_task("покажи відкриті папки")
+
+    answer.assert_called_once_with(
+        "Відкриті папки у Провіднику:\n"
+        "1. Главная\n"
+        "Що зробити з відкритими вкладками? Назвіть номер вкладки, "
+        "яку потрібно закрити, або скажіть, що залишити все як є."
+    )
+
+
+def test_close_folder_by_number_from_open_folders_list():
+    tabs = [
+        ExplorerTab(r"C:\Users\test\Videos", "Videos", 100, 0),
+        ExplorerTab("shell:Home", "Главная", 100, 1),
+    ]
+    command = make_command()
+    with (
+        patch.object(run_assistant, "get_open_explorer_tabs", return_value=tabs),
+        patch.object(run_assistant, "close_explorer_tab", return_value=True) as close_tab,
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+    ):
+        command.doing_task("покажи відкриті папки")
+        command.doing_task("закрити папку 2")
+
+    close_tab.assert_called_once_with(tabs[1])
+    assert command.pending_explorer_tabs is None
+    assert answer.call_count == 2
+    assert answer.call_args.args[0] == "Закрила папку Главная."
+
+
+def test_confirming_close_from_list_prompts_for_number_then_closes_tab():
+    tabs = [
+        ExplorerTab(r"C:\Users\test\Videos", "Videos", 100, 0),
+        ExplorerTab("shell:Home", "Главная", 100, 1),
+    ]
+    command = make_command()
+    with (
+        patch.object(run_assistant, "get_open_explorer_tabs", return_value=tabs),
+        patch.object(run_assistant, "close_explorer_tab", return_value=True) as close_tab,
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+        patch.object(
+            command,
+            "analyze_response",
+            return_value=ResponseAnalysis(ResponseCategory.CONFIRMATION, 1.0),
+        ),
+    ):
+        command.doing_task("показати відкриті папки")
+        command.doing_task("Можеш це зробити.")
+        assert command.pending_explorer_tabs == tabs
+        assert command.pending_explorer_tabs_awaiting_confirmation is False
+        command.doing_task("2")
+
+    close_tab.assert_called_once_with(tabs[1])
+    assert answer.call_args.args[0] == "Закрила папку Главная."
+    assert command.pending_explorer_tabs is None
+
+
+def test_declining_close_from_list_clears_follow_up_state():
+    command = make_command()
+    with (
+        patch.object(
+            run_assistant,
+            "get_open_explorer_tabs",
+            return_value=[ExplorerTab(r"C:\Users\test\Videos", "Videos", 100, 0)],
+        ),
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+        patch.object(
+            command,
+            "analyze_response",
+            return_value=ResponseAnalysis(ResponseCategory.REJECTION, 1.0),
+        ),
+    ):
+        command.doing_task("відкриті папки")
+        command.doing_task("Залиш все як є.")
+
+    assert command.pending_explorer_tabs is None
+    assert answer.call_args.args[0] == "Залишаю вкладки відкритими."
+
+
+def test_ambiguous_close_reply_is_clarified_and_list_stays_pending():
+    command = make_command()
+    tabs = [ExplorerTab(r"C:\Users\test\Videos", "Videos", 100, 0)]
+    with (
+        patch.object(run_assistant, "get_open_explorer_tabs", return_value=tabs),
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+        patch.object(
+            command,
+            "analyze_response",
+            return_value=ResponseAnalysis(ResponseCategory.UNKNOWN, 0.2),
+        ),
+    ):
+        command.doing_task("відкриті папки")
+        command.doing_task("Може бути")
+
+    assert command.pending_explorer_tabs == tabs
+    assert command.pending_explorer_tabs_awaiting_confirmation is True
+    assert answer.call_args.args[0] == (
+        "Не зовсім зрозуміла. Назвіть номер вкладки, яку закрити, "
+        "або скажіть, що залишити все як є."
+    )
+
+
+def test_next_unrelated_command_cancels_close_prompt_and_runs():
+    command = make_command()
+    with (
+        patch.object(
+            run_assistant,
+            "get_open_explorer_tabs",
+            return_value=[ExplorerTab(r"C:\Users\test\Videos", "Videos", 100, 0)],
+        ),
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+    ):
+        command.doing_task("відкриті папки")
+        command.doing_task("привіт")
+
+    assert command.pending_explorer_tabs is None
+    assert answer.call_count == 2
+    assert answer.call_args.args[0] == "Привіт, рада тебе бачити!"
+
+
+def test_close_folder_number_out_of_range_keeps_list_available():
+    tabs = [ExplorerTab(r"C:\Users\test\Videos", "Videos", 100, 0)]
+    command = make_command()
+    with (
+        patch.object(run_assistant, "get_open_explorer_tabs", return_value=tabs),
+        patch.object(run_assistant, "close_explorer_tab") as close_tab,
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+    ):
+        command.doing_task("відкриті папки")
+        command.doing_task("закрий папку 2")
+
+    close_tab.assert_not_called()
+    assert command.pending_explorer_tabs == tabs
+    assert answer.call_args.args[0] == "Вкажіть номер від 1 до 1."
+
+
+def test_open_explorer_tabs_command_interrupts_pending_file_selection():
+    command = make_command()
+    command.pending_file = {
+        "awaiting_selection": True,
+        "targets": [
+            r"C:\Users\test\Videos\third_party",
+            r"C:\Users\test\Videos\Videos",
+        ],
+    }
+
+    with (
+        patch.object(run_assistant, "get_open_explorer_tabs", return_value=[]) as get_tabs,
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+        patch.object(command, "handle_file_selection") as select_file,
+    ):
+        command.doing_task("покажи відкриті папки")
+
+    get_tabs.assert_called_once_with()
+    select_file.assert_not_called()
+    answer.assert_called_once_with("У Провіднику немає відкритих папок.")
+    assert command.pending_file is not None
+    assert command.pending_file["awaiting_selection"] is True
+
+
+def test_open_explorer_tabs_command_reports_empty_list():
+    command = make_command()
+    with (
+        patch.object(run_assistant, "get_open_explorer_tabs", return_value=[]),
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+    ):
+        command.doing_task("Які папки відкриті?")
+
+    answer.assert_called_once_with("У Провіднику немає відкритих папок.")
+
+
+def test_open_explorer_tabs_command_reports_read_error():
+    command = make_command()
+    with (
+        patch.object(
+            run_assistant,
+            "get_open_explorer_tabs",
+            side_effect=RuntimeError("UI Automation error"),
+        ),
+        patch.object(run_assistant, "voicing_and_printing_answer") as answer,
+        patch.object(run_assistant.logger, "warning") as warning,
+        patch.object(command.stdout, "write") as write,
+    ):
+        command.doing_task("Покажи відкриті папки")
+
+    warning.assert_called_once_with("Reading Explorer tabs failed: %s", "RuntimeError")
+    write.assert_not_called()
+    answer.assert_called_once_with(
+        "Не вдалося отримати список відкритих папок у Провіднику."
+    )
+
+
+def test_navigate_explorer_back_calls_com_go_back():
     with (
         patch("utils.file_explorer.platform.system", return_value="Windows"),
         patch("utils.file_explorer.subprocess.run") as run,
     ):
         run.return_value.returncode = 0
-        run.return_value.stdout = "shortcut-sent\n"
+        run.return_value.stdout = "navigated-back\n"
         run.return_value.stderr = ""
 
         assert navigate_explorer_back() is True
 
     script = run.call_args.args[0][-1]
-    assert "SetForegroundWindow" in script
-    assert "SendBackShortcut" in script
-    assert "CreateKeyInput(0x12, 0)" in script
-    assert "CreateKeyInput(0x25, 0)" in script
-    assert "shortcut-sent" in script
+    assert "$window.GoBack()" in script
+    assert "SetForegroundWindow($targetRoot)" not in script
+    assert "Start-Sleep" not in script
+    assert "SendBackShortcut" not in script
+    assert "public static class AssistantExplorerWindow" in script
+    assert "public static class AssistantExplorerBack" not in script
+    assert "navigated-back" in script
 
 
 def test_navigate_explorer_back_returns_false_without_explorer_window():
@@ -661,7 +1186,7 @@ def test_navigate_explorer_back_returns_false_without_explorer_window():
         assert navigate_explorer_back() is False
 
 
-def test_navigate_explorer_to_types_path_into_active_window():
+def test_navigate_explorer_to_uses_shell_navigation_on_active_window():
     completed = Mock(returncode=0, stdout="navigated\n", stderr="")
     with (
         patch("utils.file_explorer.platform.system", return_value="Windows"),
@@ -674,9 +1199,13 @@ def test_navigate_explorer_to_types_path_into_active_window():
     )
     script = run.call_args.args[0][-1]
     assert "SetForegroundWindow" in script
-    assert "NavigateTo($env:ASSISTANT_EXPLORER_TARGET)" in script
-    assert "SendKey(0x4C, 0, 0)" in script
-    assert "SendKey(0x0D, 0, 0)" in script
+    assert "$window.Navigate($target)" in script
+    assert "[string]::IsNullOrWhiteSpace($target)" in script
+    assert "$fallbackToFirst = $true" in script
+    assert "IsIconic($targetRoot)" in script
+    assert "SW_RESTORE" in script
+    assert "ReleaseComObject($shellWindow)" in script
+    assert "ReleaseComObject($shellWindows)" in script
 
 
 def test_navigate_explorer_to_returns_false_without_explorer_window():
@@ -696,7 +1225,7 @@ def test_find_open_explorer_folders_matches_localized_downloads_alias():
         0,
     )
     with (
-        patch("utils.file_explorer.get_open_explorer_tabs", return_value=[tab]),
+        patch("utils.file_explorer.windows.get_open_explorer_tabs", return_value=[tab]),
     ):
         assert find_open_explorer_folders("завантаження") == [tab]
 
@@ -707,7 +1236,7 @@ def test_find_open_explorer_folders_returns_all_matching_tabs():
         ExplorerTab(r"C:\Users\test\Downloads", "Загрузки", 100, 1),
         ExplorerTab(r"C:\Users\test\Documents", "Документы", 200, 0),
     ]
-    with patch("utils.file_explorer.get_open_explorer_tabs", return_value=tabs):
+    with patch("utils.file_explorer.windows.get_open_explorer_tabs", return_value=tabs):
         assert find_open_explorer_folders("Downloads") == tabs[:2]
 
 
@@ -717,7 +1246,7 @@ def test_get_open_explorer_tabs_reads_paths_and_tab_indices_from_shell():
         '"Name":"Загрузки","Hwnd":100,"TabIndex":0}]'
     )
     with patch(
-        "utils.file_explorer._run_explorer_script",
+        "utils.file_explorer.windows._run_explorer_script",
         return_value=output,
     ) as run_script:
         assert get_open_explorer_tabs() == [
@@ -726,11 +1255,41 @@ def test_get_open_explorer_tabs_reads_paths_and_tab_indices_from_shell():
 
     assert "UIAutomationClient" in run_script.call_args.args[0]
     assert "TabItem" in run_script.call_args.args[0]
+    script = run_script.call_args.args[0]
+    assert "$window.Document" in script
+    assert "if ($document)" in script
+    assert "$path = \"shell:$virtualName\"" in script
+    assert "LocationURL" in script
+    assert "$usedComIndexes.ContainsKey($_.Index)" in script
+    assert "$group.Group[$index]" not in script
+    assert "кільком різним шляхам" in script
+    assert 'Path = "shell:$tabName"' in script
+    assert "if ($document)" in script
+    assert "foreach ($window in $allWindows)" in script
 
 
-def test_close_explorer_tab_selects_one_tab_and_sends_ctrl_w():
+def test_explorer_powershell_runner_uses_utf8_for_unicode_output():
+    from utils.file_explorer.windows import _run_explorer_script
+
+    completed = Mock(
+        returncode=0,
+        stdout="Відео",
+        stderr="",
+    )
+    with (
+        patch("utils.file_explorer.platform.system", return_value="Windows"),
+        patch("utils.file_explorer.subprocess.run", return_value=completed) as run,
+    ):
+        assert _run_explorer_script("Write-Output 'Відео'") == "Відео"
+
+    assert run.call_args.kwargs["encoding"] == "utf-8"
+    assert run.call_args.kwargs["errors"] == "replace"
+    assert "[Console]::OutputEncoding" in run.call_args.args[0][-1]
+
+
+def test_close_explorer_tab_invokes_tab_close_button_when_available():
     tab = ExplorerTab(r"C:\Users\test\Downloads", "Загрузки", 100, 1)
-    completed = Mock(returncode=0, stdout="close-sent\n", stderr="")
+    completed = Mock(returncode=0, stdout="close-invoked\n", stderr="")
     with patch(
         "utils.file_explorer.subprocess.run",
         return_value=completed,
@@ -740,8 +1299,23 @@ def test_close_explorer_tab_selects_one_tab_and_sends_ctrl_w():
     assert run.call_args.kwargs["env"]["ASSISTANT_EXPLORER_HWND"] == "100"
     assert run.call_args.kwargs["env"]["ASSISTANT_EXPLORER_TAB_INDEX"] == "1"
     script = run.call_args.args[0][-1]
-    assert "$selection.Select()" in script
+    assert "'CloseButton'" in script
+    assert "InvokePattern" in script
+    assert "$invokePattern.Invoke()" in script
+    assert script.index("$invokePattern.Invoke()") < script.index(
+        "$selectionPattern.Select()"
+    )
     assert "SendWait('^{w}')" in script
+
+
+def test_close_explorer_tab_falls_back_to_ctrl_w():
+    tab = ExplorerTab(r"C:\Users\test\Downloads", "Загрузки", 100, 1)
+    completed = Mock(returncode=0, stdout="close-sent\n", stderr="")
+    with patch(
+        "utils.file_explorer.subprocess.run",
+        return_value=completed,
+    ):
+        assert close_explorer_tab(tab) is True
 
 
 def test_close_folder_command_does_not_search_installed_apps():

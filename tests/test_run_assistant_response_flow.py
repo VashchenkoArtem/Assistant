@@ -82,15 +82,16 @@ def test_recognizer_is_calibrated_and_keeps_short_phrases():
     assert recognizer.pause_threshold >= recognizer.non_speaking_duration
 
 
-def test_listener_records_while_assistant_is_speaking():
+def test_listener_keeps_recording_while_assistant_is_speaking():
     recognizer = Mock()
     recognizer.listen.return_value = "user audio"
     source = object()
-    voicing_answer.VOICE_ACTIVE.set()
-    try:
+
+    with (
+        patch.object(run_assistant, "VOICE_ACTIVE") as voice_active,
+    ):
+        voice_active.is_set.return_value = True
         audio = Command.listen_for_audio(recognizer, source=source)
-    finally:
-        voicing_answer.VOICE_ACTIVE.clear()
 
     assert audio == "user audio"
     recognizer.listen.assert_called_once()
@@ -99,6 +100,45 @@ def test_listener_records_while_assistant_is_speaking():
         "timeout": 1,
         "phrase_time_limit": 5,
     }
+    voice_active.is_set.assert_not_called()
+
+
+def test_current_voice_transcript_is_identified_for_echo_filter():
+    with voicing_answer.VOICE_STATE_LOCK:
+        previous_text = voicing_answer._current_voice_text
+        voicing_answer._current_voice_text = (
+            "Відкриті вікна Провідника. Назвіть номер вікна для закриття."
+        )
+    try:
+        assert voicing_answer.is_current_voice_transcript(
+            "Назвіть номер вікна"
+        )
+        assert not voicing_answer.is_current_voice_transcript(
+            "Закрий папку Завантаження"
+        )
+    finally:
+        with voicing_answer.VOICE_STATE_LOCK:
+            voicing_answer._current_voice_text = previous_text
+
+
+def test_assistant_echo_is_ignored_but_user_command_interrupts_voice(tmp_path):
+    command, _open_app = make_command(tmp_path, [])
+    command.stdout = Mock()
+    command.paused = False
+    with (
+        patch.object(run_assistant, "VOICE_ACTIVE") as voice_active,
+        patch.object(run_assistant, "is_current_voice_transcript") as is_echo,
+        patch.object(run_assistant, "interrupt_voice") as interrupt,
+        patch.object(command, "doing_task") as doing_task,
+    ):
+        voice_active.is_set.return_value = True
+        is_echo.side_effect = [True, False]
+
+        command.process_recognized_command("Назвіть номер вікна")
+        command.process_recognized_command("закрий папку Завантаження")
+
+    interrupt.assert_called_once_with()
+    doing_task.assert_called_once_with(text="закрий папку Завантаження")
 
 
 def test_interrupt_voice_stops_playback_and_invalidates_queued_speech():
