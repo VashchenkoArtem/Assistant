@@ -1,4 +1,5 @@
 from typing import Any, cast
+import logging
 import re
 
 from utils.list_apps import get_list_installed_apps
@@ -16,10 +17,14 @@ from utils.match_app import increment_open_count, register_found_app, is_unknown
 from utils.voicing_answer import (
     VOICE_ACTIVE,
     interrupt_voice,
+    is_current_voice_transcript,
     run_voice,
     voicing_and_printing_answer,
 )
 from utils.file_explorer import (
+    ExplorerTab,
+    ExplorerWindow,
+    close_explorer_window,
     close_explorer_tab,
     close_explorer_windows,
     find_open_explorer_folders,
@@ -28,6 +33,8 @@ from utils.file_explorer import (
     find_similar_file_targets,
     get_active_explorer_path,
     get_active_explorer_subfolders,
+    get_open_explorer_tabs,
+    get_open_explorer_windows,
     is_current_folder_request,
     navigate_explorer_back,
     navigate_explorer_to,
@@ -47,6 +54,7 @@ from core.response_analysis import (
     ResponseSource,
 )
 
+logger = logging.getLogger(__name__)
 
 CANCEL_ACTION_WORDS = ("скасуй", "скасувати", "скасовую", "відміна", "відміни", "відмінити")
 APP_COMMAND_PATTERN = re.compile(
@@ -64,6 +72,18 @@ CLOSE_FOLDER_PATTERN = re.compile(
     r"(?:папку|каталог|директорію)\s+(?P<name>.+)$",
     re.IGNORECASE,
 )
+CLOSE_ALL_FOLDERS_PATTERN = re.compile(
+    r"\b(?:закрий|закрити|закривай|закривати)\s+"
+    r"(?:усі|всі)\s+(?:відкриті\s+)?(?:папки|вкладки)"
+    r"(?:\s+(?:провідника|у\s+провіднику))?\b",
+    re.IGNORECASE,
+)
+CLOSE_ALL_EXPLORER_WINDOWS_PATTERN = re.compile(
+    r"\b(?:закрий|закрити|закривай|закривати)\s+"
+    r"(?:усі|всі)\s+(?:відкриті\s+)?вікна"
+    r"(?:\s+(?:провідника|у\s+провіднику))?\b",
+    re.IGNORECASE,
+)
 NAVIGATE_BACK_PATTERN = re.compile(
     r"\b(?:назад(?:\s+(?:у|в)\s+провіднику|\s+по\s+папках)?|"
     r"попередню\s+папку|перейти\s+назад\s+по\s+папках)\b",
@@ -73,6 +93,28 @@ NAVIGATE_FORWARD_PATTERN = re.compile(
     r"\b(?:вперед(?:\s+(?:у|в)\s+провіднику|\s+по\s+папках)?|"
     r"перейти\s+вперед\s+по\s+папках|"
     r"далі(?:\s+(?:у|в)\s+провіднику|\s+по\s+папках)?)\b",
+    re.IGNORECASE,
+)
+OPEN_EXPLORER_TABS_PATTERN = re.compile(
+    r"^\s*(?:"
+    r"(?:покажи|показати|перелічи|назви)\s+(?:мені\s+)?"
+    r"(?:(?:список\s+)?відкрит(?:і|их)\s+)?"
+    r"(?:папки|папок|вкладки|вкладок)|"
+    r"відкрит(?:і|их)\s+(?:папки|папок|вкладки|вкладок)|"
+    r"список\s+відкритих\s+(?:папок|вкладок)|"
+    r"які\s+(?:папки|вкладки)\s+(?:зараз\s+)?відкриті"
+    r")\b(?:\s+(?:у|в)\s+(?:провіднику|explorer))?",
+    re.IGNORECASE,
+)
+OPEN_EXPLORER_WINDOWS_PATTERN = re.compile(
+    r"^\s*(?:"
+    r"(?:покажи|показати|перелічи|назви)\s+(?:мені\s+)?"
+    r"(?:(?:усі|всі)\s+)?(?:(?:список\s+)?(?:відкрит(?:і|их)|наявн(?:і|их))\s+)?"
+    r"вік(?:на|он)|"
+    r"(?:відкрит(?:і|их)|наявн(?:і|их))\s+вік(?:на|он)|"
+    r"список\s+(?:відкритих|наявних)\s+вікон|"
+    r"які\s+вікна\s+(?:зараз\s+)?відкриті"
+    r")\b(?:\s+(?:у|в)\s+(?:провіднику|explorer))?",
     re.IGNORECASE,
 )
 GENERIC_APP_PREFIX = re.compile(
@@ -109,6 +151,10 @@ class Command(BaseCommand):
         self.run = True
         self.pending_app: dict[str, Any] | None = None
         self.pending_file: dict[str, Any] | None = None
+        self.pending_explorer_tabs: list[ExplorerTab] | None = None
+        self.pending_explorer_tabs_awaiting_confirmation = False
+        self.pending_explorer_windows: list[ExplorerWindow] | None = None
+        self.pending_explorer_windows_awaiting_confirmation = False
         self.unrecognized_audio_prompted = False
         self.pending_learning_candidate: ResponseCandidate | None = None
         self.response_repository = ResponseRepository()
@@ -169,7 +215,12 @@ class Command(BaseCommand):
         lowered = text.strip().lower()
 
         if (
-            (self.pending_app or getattr(self, "pending_file", None))
+            (
+                self.pending_app
+                or getattr(self, "pending_file", None)
+                or getattr(self, "pending_explorer_tabs", None)
+                or getattr(self, "pending_explorer_windows", None)
+            )
             and self.is_cancel_action(lowered)
         ):
             self.cancel_pending_action()
@@ -179,6 +230,28 @@ class Command(BaseCommand):
         if pending_file and NAVIGATE_BACK_PATTERN.search(lowered):
             self.pending_file = None
             self.navigate_explorer_back()
+            return
+
+        if OPEN_EXPLORER_TABS_PATTERN.search(lowered):
+            self.list_open_explorer_folders()
+            return
+
+        if OPEN_EXPLORER_WINDOWS_PATTERN.search(lowered):
+            self.list_open_explorer_windows()
+            return
+
+        if CLOSE_ALL_FOLDERS_PATTERN.search(lowered):
+            self.close_all_explorer_folders()
+            return
+
+        if self.close_listed_explorer_window(text):
+            return
+
+        if CLOSE_ALL_EXPLORER_WINDOWS_PATTERN.search(lowered):
+            self.close_explorer()
+            return
+
+        if self.close_listed_explorer_folder(text):
             return
 
         if self.pending_learning_candidate is not None:
@@ -293,6 +366,8 @@ class Command(BaseCommand):
             self.stdout.write(f"Ви сказали: {text}")
 
     def process_recognized_command(self, text: str) -> None:
+        if VOICE_ACTIVE.is_set() and is_current_voice_transcript(text):
+            return
         if VOICE_ACTIVE.is_set():
             interrupt_voice()
         self.unrecognized_audio_prompted = False
@@ -318,12 +393,27 @@ class Command(BaseCommand):
         self.pending_learning_candidate = None
         pending_file = getattr(self, "pending_file", None)
         self.pending_file = None
+        pending_explorer_tabs = getattr(self, "pending_explorer_tabs", None)
+        self.pending_explorer_tabs = None
+        self.pending_explorer_tabs_awaiting_confirmation = False
+        pending_explorer_windows = getattr(self, "pending_explorer_windows", None)
+        self.pending_explorer_windows = None
+        self.pending_explorer_windows_awaiting_confirmation = False
 
-        if pending_app is None and pending_file is None:
+        if (
+            pending_app is None
+            and pending_file is None
+            and pending_explorer_tabs is None
+            and pending_explorer_windows is None
+        ):
             return
 
         if pending_file is not None:
             voicing_and_printing_answer("Добре, скасувала відкриття.")
+        elif pending_explorer_tabs is not None:
+            voicing_and_printing_answer("Добре, скасувала вибір вкладки.")
+        elif pending_explorer_windows is not None:
+            voicing_and_printing_answer("Добре, скасувала вибір вікна.")
         elif pending_app is not None:
             action = "відкриття" if pending_app["is_open"] else "закриття"
             voicing_and_printing_answer(
@@ -699,16 +789,20 @@ class Command(BaseCommand):
             else:
                 open_target(path)
         except (OSError, RuntimeError) as error:
-            self.stdout.write(self.style.WARNING(f"Помилка відкриття: {error}"))
+            logger.warning("Opening target failed: %s", type(error).__name__)
             voicing_and_printing_answer(f"Не вдалося відкрити {label}.")
             return
         voicing_and_printing_answer(f"Відкриваю {label}.")
 
     def close_explorer(self) -> None:
+        self.pending_explorer_tabs = None
+        self.pending_explorer_tabs_awaiting_confirmation = False
+        self.pending_explorer_windows = None
+        self.pending_explorer_windows_awaiting_confirmation = False
         try:
             closed_windows = close_explorer_windows()
         except (OSError, RuntimeError, NotImplementedError) as error:
-            self.stdout.write(self.style.WARNING(f"Помилка закриття Провідника: {error}"))
+            logger.warning("Closing Explorer windows failed: %s", type(error).__name__)
             voicing_and_printing_answer("Не вдалося закрити вікна Провідника.")
             return
 
@@ -719,6 +813,29 @@ class Command(BaseCommand):
         else:
             voicing_and_printing_answer("Відкритих вікон Провідника не знайшла.")
 
+    def close_all_explorer_folders(self) -> None:
+        self.pending_explorer_tabs = None
+        self.pending_explorer_tabs_awaiting_confirmation = False
+        self.pending_explorer_windows = None
+        self.pending_explorer_windows_awaiting_confirmation = False
+        try:
+            closed_tabs = close_explorer_windows()
+        except (OSError, RuntimeError, NotImplementedError) as error:
+            logger.warning(
+                "Closing all Explorer folders failed: %s", type(error).__name__
+            )
+            voicing_and_printing_answer(
+                "Не вдалося закрити відкриті папки Провідника."
+            )
+            return
+
+        if closed_tabs:
+            voicing_and_printing_answer(
+                f"Закрила всі відкриті папки. Закрито вкладок: {closed_tabs}."
+            )
+        else:
+            voicing_and_printing_answer("У Провіднику немає відкритих папок.")
+
     def close_explorer_folder(self, folder_name: str) -> None:
         folder_name = folder_name.strip().strip("\"'«».,!? ")
         if not folder_name:
@@ -728,7 +845,7 @@ class Command(BaseCommand):
         try:
             matching_tabs = find_open_explorer_folders(folder_name)
         except (OSError, RuntimeError, NotImplementedError) as error:
-            self.stdout.write(self.style.WARNING(f"Помилка закриття папки: {error}"))
+            logger.warning("Closing Explorer folder failed: %s", type(error).__name__)
             voicing_and_printing_answer("Не вдалося закрити вікно цієї папки.")
             return
 
@@ -773,7 +890,7 @@ class Command(BaseCommand):
         try:
             closed = close_explorer_tab(tab)
         except (OSError, RuntimeError, NotImplementedError) as error:
-            self.stdout.write(self.style.WARNING(f"Помилка закриття папки: {error}"))
+            logger.warning("Closing Explorer tab failed: %s", type(error).__name__)
             voicing_and_printing_answer("Не вдалося закрити цю вкладку Провідника.")
             return
 
@@ -788,7 +905,7 @@ class Command(BaseCommand):
         try:
             navigated = navigate_explorer_back()
         except (OSError, RuntimeError, NotImplementedError) as error:
-            self.stdout.write(self.style.WARNING(f"Помилка переходу назад: {error}"))
+            logger.warning("Navigating Explorer back failed: %s", type(error).__name__)
             voicing_and_printing_answer("Не вдалося перейти назад у Провіднику.")
             return
 
@@ -799,11 +916,262 @@ class Command(BaseCommand):
         else:
             voicing_and_printing_answer("Не знайшла активного вікна Провідника.")
 
+    def list_open_explorer_folders(self) -> None:
+        self.pending_explorer_windows = None
+        self.pending_explorer_windows_awaiting_confirmation = False
+        self.pending_explorer_tabs = None
+        self.pending_explorer_tabs_awaiting_confirmation = False
+        try:
+            tabs = get_open_explorer_tabs()
+        except (OSError, RuntimeError, NotImplementedError) as error:
+            logger.warning(
+                "Reading Explorer tabs failed: %s", type(error).__name__
+            )
+            voicing_and_printing_answer(
+                "Не вдалося отримати список відкритих папок у Провіднику."
+            )
+            return
+
+        if not tabs:
+            voicing_and_printing_answer(
+                "У Провіднику немає відкритих папок."
+            )
+            return
+
+        self.pending_explorer_tabs = tabs
+        self.pending_explorer_tabs_awaiting_confirmation = True
+        folder_entries = []
+        for index, tab in enumerate(tabs, start=1):
+            is_virtual_location = tab.path.casefold().startswith("shell:") or re.fullmatch(
+                r"::\{[0-9a-f-]+\}",
+                tab.path,
+                re.IGNORECASE,
+            )
+            location = tab.name if is_virtual_location else f"{tab.name} — {tab.path}"
+            folder_entries.append(f"{index}. {location}")
+        folder_list = "\n".join(folder_entries)
+        voicing_and_printing_answer(
+            f"Відкриті папки у Провіднику:\n{folder_list}\n"
+            "Що зробити з відкритими вкладками? Назвіть номер вкладки, "
+            "яку потрібно закрити, або скажіть, що залишити все як є."
+        )
+
+    def list_open_explorer_windows(self) -> None:
+        self.pending_explorer_tabs = None
+        self.pending_explorer_tabs_awaiting_confirmation = False
+        self.pending_explorer_windows = None
+        self.pending_explorer_windows_awaiting_confirmation = False
+        try:
+            windows = get_open_explorer_windows()
+        except (OSError, RuntimeError, NotImplementedError) as error:
+            logger.warning(
+                "Reading Explorer windows failed: %s", type(error).__name__
+            )
+            voicing_and_printing_answer(
+                "Не вдалося отримати список відкритих вікон Провідника."
+            )
+            return
+
+        if not windows:
+            voicing_and_printing_answer("У Провіднику немає відкритих вікон.")
+            return
+
+        self.pending_explorer_windows = windows
+        self.pending_explorer_windows_awaiting_confirmation = True
+        entries = []
+        for index, window in enumerate(windows, start=1):
+            tab_names = []
+            for tab in window.tabs:
+                is_virtual_location = tab.path.casefold().startswith("shell:") or re.fullmatch(
+                    r"::\{[0-9a-f-]+\}",
+                    tab.path,
+                    re.IGNORECASE,
+                )
+                tab_names.append(
+                    tab.name if is_virtual_location else f"{tab.name} — {tab.path}"
+                )
+            entries.append(f"{index}. {', '.join(tab_names)}")
+
+        voicing_and_printing_answer(
+            "Відкриті вікна Провідника:\n"
+            + "\n".join(entries)
+            + "\nНазвіть номер вікна, яке закрити, або скажіть «закрити всі»."
+        )
+
+    def close_listed_explorer_window(self, text: str) -> bool:
+        windows = getattr(self, "pending_explorer_windows", None)
+        if not windows:
+            return False
+
+        if self._is_close_all_windows_reply(text):
+            self.pending_explorer_windows = None
+            self.pending_explorer_windows_awaiting_confirmation = False
+            self.close_explorer()
+            return True
+
+        selected_index = self.find_selection_index(text, len(windows))
+        if selected_index is not None:
+            window = windows[selected_index]
+            self.pending_explorer_windows = None
+            self.pending_explorer_windows_awaiting_confirmation = False
+            self._close_selected_explorer_window(window)
+            return True
+
+        if self._is_other_assistant_command(text):
+            self.pending_explorer_windows = None
+            self.pending_explorer_windows_awaiting_confirmation = False
+            return False
+
+        analysis = self.analyze_response(
+            text,
+            question="Що зробити з відкритими вікнами Провідника?",
+        )
+        if analysis.category == ResponseCategory.CONFIRMATION:
+            self.pending_explorer_windows_awaiting_confirmation = False
+            voicing_and_printing_answer(
+                "Назвіть номер вікна, яке закрити, або скажіть «закрити всі»."
+            )
+            return True
+        if analysis.category == ResponseCategory.REJECTION:
+            self.pending_explorer_windows = None
+            self.pending_explorer_windows_awaiting_confirmation = False
+            voicing_and_printing_answer("Залишаю вікна Провідника відкритими.")
+            return True
+
+        if self.pending_explorer_windows_awaiting_confirmation:
+            clarification = (
+                "Не зовсім зрозуміла. Назвіть номер вікна, яке закрити, "
+                "або скажіть «закрити всі»."
+            )
+        else:
+            clarification = (
+                f"Не розпізнала номер вікна. Назвіть номер від 1 до {len(windows)} "
+                "або надішліть іншу команду."
+            )
+        voicing_and_printing_answer(clarification)
+        return True
+
+    @staticmethod
+    def _is_close_all_windows_reply(text: str) -> bool:
+        normalized = re.sub(r"[^\w\s]", "", text.casefold()).strip()
+        return bool(
+            CLOSE_ALL_EXPLORER_WINDOWS_PATTERN.search(text)
+            or re.fullmatch(
+                r"(?:(?:закрий|закрити|закривай)\s+)?(?:усі|всі)(?:\s+вікна)?",
+                normalized,
+            )
+        )
+
+    def _close_selected_explorer_window(self, window: ExplorerWindow) -> None:
+        try:
+            closed = close_explorer_window(window.hwnd)
+        except (OSError, RuntimeError, NotImplementedError) as error:
+            logger.warning("Closing Explorer window failed: %s", type(error).__name__)
+            voicing_and_printing_answer("Не вдалося закрити вибране вікно Провідника.")
+            return
+
+        if closed:
+            voicing_and_printing_answer("Закрила вибране вікно Провідника.")
+        else:
+            voicing_and_printing_answer(
+                "Не знайшла вибране вікно Провідника. Повторно надішліть запит."
+            )
+
+    def close_listed_explorer_folder(self, text: str) -> bool:
+        tabs = getattr(self, "pending_explorer_tabs", None)
+        if not tabs:
+            return False
+
+        close_match = CLOSE_FOLDER_PATTERN.search(text)
+        if close_match is not None:
+            selection = close_match.group("name").strip().strip("\"'«».,!? ")
+            if re.fullmatch(r"\d+", selection):
+                selected_number = int(selection)
+                if not 1 <= selected_number <= len(tabs):
+                    voicing_and_printing_answer(
+                        f"Вкажіть номер від 1 до {len(tabs)}."
+                    )
+                    return True
+
+                self.pending_explorer_tabs = None
+                self.pending_explorer_tabs_awaiting_confirmation = False
+                self._close_selected_explorer_folder(tabs[selected_number - 1])
+                return True
+
+        selected_index = self.find_selection_index(text, len(tabs))
+        if selected_index is not None:
+            self.pending_explorer_tabs = None
+            self.pending_explorer_tabs_awaiting_confirmation = False
+            self._close_selected_explorer_folder(tabs[selected_index])
+            return True
+
+        if self._is_other_assistant_command(text):
+            self.pending_explorer_tabs = None
+            self.pending_explorer_tabs_awaiting_confirmation = False
+            return False
+
+        analysis = self.analyze_response(
+            text,
+            question="Що зробити з відкритими вкладками Провідника?",
+        )
+        if analysis.category == ResponseCategory.CONFIRMATION:
+            self.pending_explorer_tabs_awaiting_confirmation = False
+            voicing_and_printing_answer(
+                "Яку вкладку закрити? Назвіть її номер зі списку."
+            )
+            return True
+        if analysis.category == ResponseCategory.REJECTION:
+            self.pending_explorer_tabs = None
+            self.pending_explorer_tabs_awaiting_confirmation = False
+            voicing_and_printing_answer("Залишаю вкладки відкритими.")
+            return True
+
+        if self.pending_explorer_tabs_awaiting_confirmation:
+            clarification = (
+                "Не зовсім зрозуміла. Назвіть номер вкладки, яку закрити, "
+                "або скажіть, що залишити все як є."
+            )
+        else:
+            clarification = (
+                "Не розпізнала номер вкладки. Назвіть номер зі списку "
+                "або надішліть іншу команду."
+            )
+        voicing_and_printing_answer(clarification)
+        return True
+
+    @staticmethod
+    def _is_other_assistant_command(text: str) -> bool:
+        lowered = text.strip().lower()
+        return bool(
+            CLOSE_ALL_FOLDERS_PATTERN.search(lowered)
+            or CLOSE_ALL_EXPLORER_WINDOWS_PATTERN.search(lowered)
+            or CLOSE_EXPLORER_PATTERN.search(lowered)
+            or CLOSE_FOLDER_PATTERN.search(text)
+            or NAVIGATE_BACK_PATTERN.search(lowered)
+            or NAVIGATE_FORWARD_PATTERN.search(lowered)
+            or OPEN_EXPLORER_TABS_PATTERN.search(lowered)
+            or OPEN_EXPLORER_WINDOWS_PATTERN.search(lowered)
+            or parse_open_target_command(text)
+            or APP_COMMAND_PATTERN.search(lowered)
+            or any(
+                keyword in lowered
+                for keyword in (
+                    "привіт",
+                    "додатки",
+                    "пауза",
+                    "продовж",
+                    "віднови",
+                    "зупини",
+                    "стоп",
+                )
+            )
+        )
+
     def navigate_explorer_forward(self, requested_name: str = "") -> None:
         try:
             folders = get_active_explorer_subfolders()
         except (OSError, RuntimeError, NotImplementedError) as error:
-            self.stdout.write(self.style.WARNING(f"Помилка читання папок: {error}"))
+            logger.warning("Reading Explorer folders failed: %s", type(error).__name__)
             voicing_and_printing_answer("Не вдалося прочитати папки у Провіднику.")
             return
 

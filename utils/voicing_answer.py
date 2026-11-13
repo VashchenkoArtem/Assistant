@@ -4,6 +4,7 @@ import queue
 import tempfile
 import threading
 import time
+import re
 
 import edge_tts
 import pygame
@@ -25,6 +26,36 @@ VOICE_STATE_LOCK = threading.Lock()
 GUI_TEXT_MODE = threading.Event()
 _active_voice_requests = 0
 _voice_generation = 0
+_current_voice_text = ""
+
+
+def _set_current_voice_text(text: str) -> None:
+    global _current_voice_text
+    with VOICE_STATE_LOCK:
+        _current_voice_text = text
+
+
+def _clear_current_voice_text(text: str) -> None:
+    global _current_voice_text
+    with VOICE_STATE_LOCK:
+        if _current_voice_text == text:
+            _current_voice_text = ""
+
+
+def is_current_voice_transcript(text: str) -> bool:
+    heard_words = re.findall(r"[^\W\d_]+", text.casefold())
+    if len(heard_words) < 2:
+        return False
+
+    with VOICE_STATE_LOCK:
+        spoken_words = re.findall(r"[^\W\d_]+", _current_voice_text.casefold())
+    if len(heard_words) > len(spoken_words):
+        return False
+
+    return any(
+        spoken_words[start:start + len(heard_words)] == heard_words
+        for start in range(len(spoken_words) - len(heard_words) + 1)
+    )
 
 
 def _mark_voice_request_started():
@@ -57,8 +88,12 @@ def _voice_worker():
         try:
             if _is_current_voice_generation(generation):
                 with AUDIO_LOCK:
-                    voicing_text(text, generation)
-                    time.sleep(0.1)
+                    _set_current_voice_text(text)
+                    try:
+                        voicing_text(text, generation)
+                        time.sleep(0.1)
+                    finally:
+                        _clear_current_voice_text(text)
         finally:
             VOICE_QUEUE.task_done()
             _mark_voice_request_finished()
@@ -150,8 +185,12 @@ def run_voice(text: str, wait: bool = False):
             generation = _voice_generation
         try:
             with AUDIO_LOCK:
-                voicing_text(text, generation)
-                time.sleep(0.1)
+                _set_current_voice_text(text)
+                try:
+                    voicing_text(text, generation)
+                    time.sleep(0.1)
+                finally:
+                    _clear_current_voice_text(text)
         finally:
             _mark_voice_request_finished()
         return
