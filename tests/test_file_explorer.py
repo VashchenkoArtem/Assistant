@@ -1,6 +1,6 @@
 import os
 import threading
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
 
@@ -570,7 +570,10 @@ def test_open_folder_reports_generic_error_without_powerShell_details():
     ):
         command.open_file_target(r"C:\Users\test\Videos")
 
-    answer.assert_called_once_with("Не вдалося відкрити Videos.")
+    assert answer.call_args_list == [
+        call("Відкриваю Videos.", wait=True),
+        call("Не вдалося відкрити Videos."),
+    ]
     write.assert_not_called()
     warning.assert_called_once_with("Opening target failed: %s", "RuntimeError")
 

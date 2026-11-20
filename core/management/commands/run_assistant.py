@@ -595,9 +595,17 @@ class Command(BaseCommand):
         )
 
         if pending_app["is_open"]:
+            voicing_and_printing_answer(
+                f"Відкриваю {pending_app['name']}",
+                wait=True,
+            )
             if self.open_app(pending_app["path"]):
                 increment_open_count(command)
         else:
+            voicing_and_printing_answer(
+                f"Закриваю {pending_app['name']}",
+                wait=True,
+            )
             self.close_app(app_name=pending_app["path"])
 
         self.pending_app = None
@@ -828,6 +836,7 @@ class Command(BaseCommand):
             if path == "ms-settings:"
             else os.path.basename(path) or path
         )
+        voicing_and_printing_answer(f"Відкриваю {label}.", wait=True)
         try:
             if new_window:
                 open_target(path, new_window=True)
@@ -837,7 +846,6 @@ class Command(BaseCommand):
             logger.warning("Opening target failed: %s", type(error).__name__)
             voicing_and_printing_answer(f"Не вдалося відкрити {label}.")
             return
-        voicing_and_printing_answer(f"Відкриваю {label}.")
 
     def _raise_if_cancelled(self) -> None:
         cancel_event = getattr(self, "cancel_event", None)
@@ -1539,11 +1547,11 @@ class Command(BaseCommand):
     def execute_app_action(self, name: str, path: str, is_open: bool) -> None:
         command = register_found_app(name=name, path=path)
         if is_open:
-            voicing_and_printing_answer(f"Відкриваю {name}")
+            voicing_and_printing_answer(f"Відкриваю {name}", wait=True)
             if self.open_app(path=path):
                 increment_open_count(command)
         else:
-            voicing_and_printing_answer(f"Закриваю {name}")
+            voicing_and_printing_answer(f"Закриваю {name}", wait=True)
             self.close_app(app_name=path)
 
     def open_app(self, path) -> bool:

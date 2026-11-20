@@ -1,6 +1,8 @@
 import os
 import platform
 import subprocess
+import threading
+from collections.abc import Iterable
 
 from utils.file_explorer.models import ExplorerTab, ExplorerWindow
 from utils.file_explorer.operations import (
@@ -32,8 +34,58 @@ from utils.file_explorer.targets import (
     find_file_targets_in_folder,
     find_similar_file_targets,
     is_current_folder_request,
+    parse_find_file_command,
     parse_open_target_command,
 )
+
+
+def find_named_file_targets(
+    target: str,
+    roots: Iterable[str] | None = None,
+    cancellation_event: threading.Event | None = None,
+) -> list[str]:
+    if cancellation_event is not None and cancellation_event.is_set():
+        raise InterruptedError("Пошук файлів скасовано")
+
+    cleaned_target = _clean_target(target)
+    if not cleaned_target:
+        return []
+
+    expanded_target = os.path.expandvars(os.path.expanduser(cleaned_target))
+    if os.path.isfile(expanded_target):
+        return [os.path.abspath(expanded_target)]
+
+    target_name = os.path.basename(cleaned_target.rstrip("\\/"))
+    if not target_name:
+        return []
+
+    found: list[str] = []
+    seen: set[str] = set()
+    search_roots = roots if roots is not None else _folder_bases()
+    for root in search_roots:
+        if cancellation_event is not None and cancellation_event.is_set():
+            raise InterruptedError("Пошук файлів скасовано")
+        if not os.path.isdir(root):
+            continue
+        for path in _iter_targets(
+            root,
+            cancellation_event=cancellation_event,
+            max_depth=None,
+        ):
+            if cancellation_event is not None and cancellation_event.is_set():
+                raise InterruptedError("Пошук файлів скасовано")
+            if not os.path.isfile(path) or not _matches_target_name(path, target_name):
+                continue
+            canonical_path = os.path.normcase(os.path.abspath(path))
+            if canonical_path in seen:
+                continue
+            seen.add(canonical_path)
+            found.append(path)
+            if len(found) >= MAX_RESULTS:
+                return found
+    return found
+
+
 from utils.file_explorer.windows import (
     _active_explorer_window_script,
     _run_explorer_script,

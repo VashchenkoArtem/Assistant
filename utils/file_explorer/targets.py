@@ -1,6 +1,7 @@
 import os
 import platform
 import re
+import threading
 from collections.abc import Iterable
 
 from utils.text_similarity import partial_similarity, similarity
@@ -9,6 +10,12 @@ from utils.transliterate import transliterate
 
 OPEN_VERB = re.compile(
     r"\b(?:відкрий|відкрити|відкривай|відкривати)\b",
+    re.IGNORECASE,
+)
+
+FIND_FILE_COMMAND = re.compile(
+    r"\b(?:знайди|знайти|відшукай|відшукати)\s+"
+    r"(?:файл(?:и|ів)?|документ(?:и|ів)?)\s*(?P<target>.*)$",
     re.IGNORECASE,
 )
 
@@ -95,6 +102,13 @@ def is_current_folder_request(text: str) -> bool:
     return CURRENT_FOLDER_PHRASE.search(text) is not None
 
 
+def parse_find_file_command(text: str) -> str | None:
+    match = FIND_FILE_COMMAND.search(text)
+    if match is None:
+        return None
+    return _clean_target(match.group("target"))
+
+
 def parse_open_target_command(text: str) -> tuple[str, str, bool] | None:
     verb_match = OPEN_VERB.search(text)
     if verb_match is None:
@@ -141,18 +155,25 @@ def _search_roots() -> list[str]:
     return list(dict.fromkeys(roots))
 
 
-def _iter_targets(root: str) -> Iterable[str]:
+def _iter_targets(
+    root: str,
+    cancellation_event: threading.Event | None = None,
+    max_depth: int | None = 4,
+) -> Iterable[str]:
     root_depth = root.rstrip(os.sep).count(os.sep)
     for current_path, directories, files in os.walk(root):
+        if cancellation_event is not None and cancellation_event.is_set():
+            raise InterruptedError("Пошук файлів скасовано")
         depth = current_path.rstrip(os.sep).count(os.sep) - root_depth
-        directories[:] = [
-            name for name in directories
-            if not name.startswith(".") and name.casefold() not in {
-                "appdata", "node_modules", "venv", "__pycache__"
-            }
-        ]
-        if depth >= MAX_SEARCH_DEPTH:
-            directories.clear()
+        if max_depth is not None:
+            directories[:] = [
+                name for name in directories
+                if not name.startswith(".") and name.casefold() not in {
+                    "appdata", "node_modules", "venv", "__pycache__"
+                }
+            ]
+            if depth >= max_depth:
+                directories.clear()
 
         for name in directories:
             yield os.path.join(current_path, name)
@@ -204,7 +225,10 @@ def find_file_targets(
     target: str,
     roots: Iterable[str] | None = None,
     expected_kind: str | None = None,
+    cancellation_event: threading.Event | None = None,
 ) -> list[str]:
+    if cancellation_event is not None and cancellation_event.is_set():
+        raise InterruptedError("Пошук файлів скасовано")
     cleaned_target = _clean_target(target)
     if not cleaned_target:
         return []
@@ -246,7 +270,10 @@ def find_file_targets(
     for root in roots if roots is not None else _search_roots():
         if not os.path.isdir(root):
             continue
-        for path in _iter_targets(root):
+        for path in _iter_targets(
+            root,
+            cancellation_event=cancellation_event,
+        ):
             if not _matches_target_name(path, target_name):
                 continue
             if not _is_expected_kind(path, expected_kind):
@@ -257,6 +284,53 @@ def find_file_targets(
                 found.append(path)
                 if len(found) >= MAX_RESULTS:
                     return found
+    return found
+
+
+def find_named_file_targets(
+    target: str,
+    roots: Iterable[str] | None = None,
+    cancellation_event: threading.Event | None = None,
+) -> list[str]:
+    if cancellation_event is not None and cancellation_event.is_set():
+        raise InterruptedError("Пошук файлів скасовано")
+
+    cleaned_target = _clean_target(target)
+    if not cleaned_target:
+        return []
+
+    expanded_target = os.path.expandvars(os.path.expanduser(cleaned_target))
+    if os.path.isfile(expanded_target):
+        return [os.path.abspath(expanded_target)]
+
+    target_name = os.path.basename(cleaned_target.rstrip("\\/"))
+    if not target_name:
+        return []
+
+    found: list[str] = []
+    seen: set[str] = set()
+    search_roots = roots if roots is not None else _folder_bases()
+    for root in search_roots:
+        if cancellation_event is not None and cancellation_event.is_set():
+            raise InterruptedError("Пошук файлів скасовано")
+        if not os.path.isdir(root):
+            continue
+        for path in _iter_targets(
+            root,
+            cancellation_event=cancellation_event,
+            max_depth=None,
+        ):
+            if not os.path.isfile(path):
+                continue
+            if not _matches_target_name(path, target_name):
+                continue
+            canonical_path = os.path.normcase(os.path.abspath(path))
+            if canonical_path in seen:
+                continue
+            seen.add(canonical_path)
+            found.append(path)
+            if len(found) >= MAX_RESULTS:
+                return found
     return found
 
 
@@ -286,7 +360,10 @@ def find_similar_file_targets(
     target: str,
     roots: Iterable[str] | None = None,
     expected_kind: str | None = None,
+    cancellation_event: threading.Event | None = None,
 ) -> list[str]:
+    if cancellation_event is not None and cancellation_event.is_set():
+        raise InterruptedError("Пошук файлів скасовано")
     target_name = os.path.basename(_clean_target(target).rstrip("\\/"))
     query = _normalized_name(os.path.splitext(target_name)[0])
     if len(query) < 3:
@@ -298,7 +375,10 @@ def find_similar_file_targets(
     for root in roots if roots is not None else _search_roots():
         if not os.path.isdir(root):
             continue
-        for path in _iter_targets(root):
+        for path in _iter_targets(
+            root,
+            cancellation_event=cancellation_event,
+        ):
             if not _is_expected_kind(path, expected_kind):
                 continue
             canonical_path = os.path.normcase(os.path.abspath(path))

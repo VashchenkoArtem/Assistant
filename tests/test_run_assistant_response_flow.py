@@ -193,6 +193,31 @@ def test_synchronous_voice_playback_marks_audio_as_busy():
     assert not voicing_answer.VOICE_ACTIVE.is_set()
 
 
+def test_app_action_waits_for_voice_before_execution(tmp_path):
+    command, open_app = make_command(tmp_path, [])
+    call_order = Mock()
+
+    with (
+        patch.object(
+            run_assistant,
+            "voicing_and_printing_answer",
+            side_effect=lambda text, wait=False: call_order.voice(text, wait),
+        ),
+        patch.object(
+            run_assistant,
+            "register_found_app",
+            return_value=Mock(),
+        ),
+    ):
+        open_app.side_effect = lambda path: call_order.open(path) or True
+        command.execute_app_action("Steam", r"C:\Apps\steam.exe", True)
+
+    assert call_order.mock_calls == [
+        call.voice("Відкриваю Steam", True),
+        call.open(r"C:\Apps\steam.exe"),
+    ]
+
+
 def test_unknown_app_confirmation_reprompts_without_executing(tmp_path):
     command, open_app = make_command(
         tmp_path,

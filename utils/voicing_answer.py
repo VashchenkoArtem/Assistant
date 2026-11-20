@@ -225,7 +225,7 @@ def interrupt_voice() -> None:
             pygame.mixer.stop()
 
 
-def voicing_and_printing_answer(text: str):
+def voicing_and_printing_answer(text: str, wait: bool = False):
     if not GUI_TEXT_MODE.is_set():
-        run_voice(text)
+        run_voice(text, wait=wait)
     print(text)
