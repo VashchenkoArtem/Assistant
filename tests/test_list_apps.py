@@ -4,6 +4,8 @@ import os
 from subprocess import CompletedProcess, TimeoutExpired
 from unittest.mock import patch
 
+import pytest
+
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "Assistant.settings")
 
 import django
@@ -12,6 +14,13 @@ django.setup()
 
 from utils.list_apps import _get_windows_store_apps, get_list_installed_apps
 from utils.match_app import find_best_match
+
+
+@pytest.fixture(autouse=True)
+def clear_installed_apps_cache():
+    get_list_installed_apps.cache_clear()
+    yield
+    get_list_installed_apps.cache_clear()
 
 
 def test_windows_store_apps_are_returned_with_launcher_id():
