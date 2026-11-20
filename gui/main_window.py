@@ -10,10 +10,16 @@ from typing import Any, cast
 from PyQt6.QtCore import QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QKeyEvent, QMouseEvent, QPixmap, QResizeEvent, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
     QMainWindow,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -21,6 +27,11 @@ from PyQt6.QtWidgets import (
 
 from .icon_loader import icon_path as resolve_icon_path, load_pixmap
 from .widgets.chat_widgets import ChatCard
+from .widgets.chat_panel import ChatPanel
+from .widgets.composer import Composer
+from .widgets.search_bar import SearchBar
+from .widgets.sidebar import Sidebar
+from .widgets.title_bar import TitleBar
 from utils.voicing_answer import GUI_TEXT_MODE, interrupt_voice
 
 
@@ -305,11 +316,13 @@ class MainWindow(QMainWindow):
         self._voice_worker: VoiceWorker | None = None
         self._voice_status_card: ChatCard | None = None
         self._voice_stopped_card: ChatCard | None = None
-        self._initialization_worker: BackendHealthWorker | None = None
+        self._initialization_worker: InitializationWorker | None = None
         self._initialization_status_card: ChatCard | None = None
-        self._initializing = True
+        self._command = command
+        self._initializing = command is None
 
         self.chat = ChatPanel()
+        self._chat_layout = self.chat.chat_layout
         self.search = SearchBar()
         self.composer = Composer()
         self._build_ui()
@@ -323,15 +336,34 @@ class MainWindow(QMainWindow):
         shortcut.activated.connect(self.start_microphone_input)
         self._microphone_shortcut = shortcut
 
-        self._initialization_status_card = self._add_chat_card(
-            "System",
-            "Підключення до асистента...",
-            status="Initializing",
-        )
-        self._set_commands_enabled(False)
-        self._initialization_worker = BackendHealthWorker(self.BACKEND_URL)
-        self._initialization_worker.signals.finished.connect(self._backend_initialized)
-        self._thread_pool.start(self._initialization_worker)
+        if command is None:
+            self._initialization_status_card = self._add_chat_card(
+                "System",
+                "Підключення до асистента...",
+                status="Initializing",
+            )
+            self._set_commands_enabled(False)
+            project_root = Path(__file__).resolve().parents[1]
+            self._initialization_worker = InitializationWorker(project_root)
+            self._initialization_worker.signals.finished.connect(
+                self._assistant_initialized
+            )
+            self._thread_pool.start(self._initialization_worker)
+        else:
+            self._initialization_worker = None
+            self._set_commands_enabled(True)
+
+    def _assistant_initialized(self, command: object, error: object) -> None:
+        if error is not None or command is None:
+            message = str(error or "Не вдалося ініціалізувати асистента.")
+            self._remove_initialization_status_card()
+            self._add_chat_card("System", message)
+            return
+
+        self._command = command
+        self._initializing = False
+        self._remove_initialization_status_card()
+        self._set_commands_enabled(True)
 
     # ============================ РОБОТА З ІКОНКАМИ ============================
     def icon_path(self, name: str) -> Path:
@@ -598,6 +630,9 @@ class MainWindow(QMainWindow):
         self._scroll_chat_to_bottom()
         return card
 
+    def _scroll_chat_to_bottom(self) -> None:
+        self.chat.scroll_to_bottom()
+
     def _remove_chat_card(self, card: ChatCard | None) -> None:
         if card is None:
             return
@@ -788,14 +823,8 @@ class MainWindow(QMainWindow):
         self._initialization_status_card = None
 
     def _set_commands_enabled(self, enabled: bool) -> None:
-        if self._prompt_input is not None:
-            self._prompt_input.setEnabled(enabled)
-        if self._search_field is not None:
-            self._search_field.setEnabled(enabled)
-        if self._keyboard_button is not None:
-            self._keyboard_button.setEnabled(enabled)
-        if self._mic_button is not None:
-            self._mic_button.setEnabled(enabled)
+        self.search.setEnabled(enabled)
+        self.composer.set_prompt_enabled(enabled)
 
     def _set_microphone_icon(self, active: bool) -> None:
         if self._mic_button is None:

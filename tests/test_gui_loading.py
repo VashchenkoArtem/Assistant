@@ -33,6 +33,22 @@ def test_model_loading_shows_only_animated_styled_dot(qt_app):
     window.close()
 
 
+def test_main_window_initializes_assistant_without_command(qt_app, monkeypatch):
+    monkeypatch.setattr("gui.main_window.QThreadPool.start", lambda *_args: None)
+    window = MainWindow()
+
+    assert window._initializing
+    assert window._initialization_status_card is not None
+
+    command = object()
+    window._assistant_initialized(command, None)
+
+    assert window._command is command
+    assert not window._initializing
+    assert window._initialization_status_card is None
+    window.close()
+
+
 def test_command_worker_forwards_model_loading_state():
     class SemanticAnalyzerStub:
         def __init__(self):
