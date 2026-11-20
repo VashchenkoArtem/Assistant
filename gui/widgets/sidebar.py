@@ -55,9 +55,9 @@ class Sidebar(QFrame):
 
         buttons: list[QToolButton] = []
         for icon_name, active in (
-            ("home.svg", True),
-            ("user_ico.svg", False),
-            ("settings.svg", False),
+            ("navigation/home.svg", True),
+            ("chat/user_ico.svg", False),
+            ("navigation/settings.svg", False),
         ):
             button = QToolButton()
             button.setIcon(make_icon(icon_name, 22))

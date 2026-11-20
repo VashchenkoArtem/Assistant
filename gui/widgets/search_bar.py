@@ -1,4 +1,4 @@
-from PyQt6.QtCore import QSize, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -44,7 +44,7 @@ class SearchBar(QWidget):
         layout.setSpacing(10)
 
         search_icon = QLabel()
-        search_icon.setPixmap(make_pixmap("search.svg", 16))
+        search_icon.setPixmap(make_pixmap("controls/search.svg", 16))
         layout.addWidget(search_icon)
 
         self.field = QLineEdit()

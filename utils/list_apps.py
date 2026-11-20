@@ -1,10 +1,13 @@
 import json
+import logging
 import os
 import platform
 import re
 import subprocess
 from functools import lru_cache
 
+
+logger = logging.getLogger(__name__)
 
 TECHNICAL_APP_NAME = re.compile(
     r"^(?:uninstall(?:er)?|unins\d*|setup|installer|install|updater?|"
@@ -29,19 +32,27 @@ def _get_windows_store_apps():
         "} | Select-Object Name, AppID; "
         "$apps | ConvertTo-Json -Compress"
     )
-    result = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            command,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        logger.warning(
+            "Windows Store app lookup timed out after %s seconds; "
+            "continuing without Store apps.",
+            error.timeout,
+        )
+        return {}
     if result.returncode != 0:
         raise RuntimeError(
             f"Could not query Windows Store apps: {result.stderr.strip()}"

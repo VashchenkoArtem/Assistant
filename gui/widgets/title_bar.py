@@ -47,7 +47,7 @@ class TitleBar(QFrame):
         layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         brand_icon = QLabel()
-        brand_icon.setPixmap(make_pixmap("logo_assistant.svg", 22))
+        brand_icon.setPixmap(make_pixmap("branding/logo_assistant.svg", 22))
         brand_icon.setFixedWidth(28)
         brand_icon.setStyleSheet("background: transparent; border: none;")
         layout.addWidget(brand_icon)
@@ -65,9 +65,9 @@ class TitleBar(QFrame):
         actions_layout.setSpacing(4)
 
         for icon_name, callback in (
-            ("hide_window.svg", minimize_callback),
-            ("full_window.svg", maximize_callback),
-            ("close_winow.svg", close_callback),
+            ("window/hide_window.svg", minimize_callback),
+            ("window/full_window.svg", maximize_callback),
+            ("window/close_winow.svg", close_callback),
         ):
             button = QToolButton()
             button.setIcon(make_icon(icon_name, 40))

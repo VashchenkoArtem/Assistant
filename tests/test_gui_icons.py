@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 
 from gui.icon_loader import icon_path, load_pixmap
+from gui.widgets.icons import icon_path as widget_icon_path
 
 
 def test_window_control_icons_render_without_deleted_png_assets():
@@ -37,6 +38,26 @@ def test_icons_in_purpose_folders_are_loadable():
         assert not load_pixmap(icon_path(relative_path), 24).isNull()
 
     assert app is not None
+
+
+def test_widget_icon_paths_resolve_to_existing_assets():
+    for name in (
+        "branding/logo_assistant.svg",
+        "chat/bot_ico.svg",
+        "chat/info.svg",
+        "chat/user_ico.svg",
+        "controls/micro.svg",
+        "controls/micro_off.svg",
+        "controls/search.svg",
+        "controls/system_enter.svg",
+        "navigation/home.svg",
+        "navigation/settings.svg",
+        "status/status.svg",
+        "window/close_winow.svg",
+        "window/full_window.svg",
+        "window/hide_window.svg",
+    ):
+        assert widget_icon_path(name).is_file()
 
 
 def test_missing_icon_path_is_reported():

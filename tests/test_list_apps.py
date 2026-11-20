@@ -1,6 +1,7 @@
 import json
+import logging
 import os
-from subprocess import CompletedProcess
+from subprocess import CompletedProcess, TimeoutExpired
 from unittest.mock import patch
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "Assistant.settings")
@@ -35,8 +36,38 @@ def test_windows_store_apps_are_returned_with_launcher_id():
             "appx://SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"
         )
     }
-    assert run.call_args.kwargs["timeout"] == 15
+    assert run.call_args.kwargs["timeout"] == 30
     assert run.call_args.kwargs["check"] is False
+
+
+def test_store_app_timeout_falls_back_to_regular_app_scan(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    executable = tmp_path / "Example.exe"
+    executable.touch()
+    get_list_installed_apps.cache_clear()
+    monkeypatch.setattr("utils.list_apps.platform.system", lambda: "Windows")
+
+    with (
+        patch(
+            "utils.list_apps.subprocess.run",
+            side_effect=TimeoutExpired(["powershell"], timeout=30),
+        ),
+        patch(
+            "utils.list_apps.search_dirs_and_extentions",
+            return_value=([str(tmp_path)], (".exe", ".lnk")),
+        ),
+        caplog.at_level(logging.WARNING, logger="utils.list_apps"),
+    ):
+        try:
+            apps = get_list_installed_apps()
+        finally:
+            get_list_installed_apps.cache_clear()
+
+    assert apps == {"Example": str(executable)}
+    assert "continuing without Store apps" in caplog.text
 
 
 def test_windows_store_app_lookup_reports_powershell_failure():

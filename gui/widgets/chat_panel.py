@@ -77,9 +77,9 @@ class ChatPanel(QWidget):
         is_user: bool = False,
         status: str | None = None,
     ) -> ChatCard:
-        icon_name = "user_ico.svg" if is_user else "bot_ico.svg"
+        icon_name = "chat/user_ico.svg" if is_user else "chat/bot_ico.svg"
         if author == "System":
-            icon_name = "info.svg"
+            icon_name = "chat/info.svg"
         card = ChatCard(
             author,
             body.strip(),
@@ -87,7 +87,7 @@ class ChatPanel(QWidget):
             str(icon_path(icon_name)),
             is_user=is_user,
             status=status,
-            status_icon=str(icon_path("status.svg")) if status else None,
+            status_icon=str(icon_path("status/status.svg")) if status else None,
         )
         insert_at = max(0, self.chat_layout.count() - 1)
         self.chat_layout.insertWidget(insert_at, card)

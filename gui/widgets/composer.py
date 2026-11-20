@@ -54,7 +54,7 @@ class Composer(QWidget):
         composer_layout.setSpacing(8)
 
         self.keyboard = QPushButton()
-        self.keyboard.setIcon(make_icon("system_enter.svg", 20))
+        self.keyboard.setIcon(make_icon("controls/system_enter.svg", 20))
         self.keyboard.setIconSize(QSize(20, 20))
         self.keyboard.setObjectName("keyboardButton")
         self.keyboard.setFixedSize(32, 32)
@@ -66,7 +66,7 @@ class Composer(QWidget):
         composer_layout.addWidget(self.prompt, 1, Qt.AlignmentFlag.AlignVCenter)
 
         self.microphone = QPushButton()
-        self.microphone.setIcon(make_icon("micro_off.svg", 20))
+        self.microphone.setIcon(make_icon("controls/micro_off.svg", 20))
         self.microphone.setIconSize(QSize(20, 20))
         self.microphone.setObjectName("micButton")
         self.microphone.setFixedSize(32, 32)
@@ -94,5 +94,5 @@ class Composer(QWidget):
         self.keyboard.setEnabled(enabled)
 
     def set_microphone_active(self, active: bool) -> None:
-        icon_name = "micro.svg" if active else "micro_off.svg"
+        icon_name = "controls/micro.svg" if active else "controls/micro_off.svg"
         self.microphone.setIcon(make_icon(icon_name, 20))
