@@ -1,4 +1,4 @@
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
     QPushButton,
@@ -42,6 +42,9 @@ QToolButton.sideButton:hover, QToolButton.sideButton:checked {
 
 
 class Sidebar(QFrame):
+    home_requested = pyqtSignal()
+    profile_requested = pyqtSignal()
+
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("sidebar")
@@ -54,10 +57,11 @@ class Sidebar(QFrame):
         layout.setSpacing(6)
 
         buttons: list[QToolButton] = []
-        for icon_name, active in (
-            ("home.svg", True),
-            ("user_ico.svg", False),
-            ("settings.svg", False),
+        self._page_buttons: dict[str, QToolButton] = {}
+        for page, icon_name, active, tooltip in (
+            ("home", "home.svg", True, "Головна"),
+            ("profile", "user_ico.svg", False, "Персоналізація"),
+            ("settings", "settings.svg", False, "Налаштування"),
         ):
             button = QToolButton()
             button.setIcon(make_icon(icon_name, 22))
@@ -66,9 +70,15 @@ class Sidebar(QFrame):
             button.setCheckable(True)
             button.setChecked(active)
             button.setFixedSize(56, 56)
+            button.setToolTip(tooltip)
             button.clicked.connect(
                 lambda _checked=False, selected=button: self._select(selected, buttons)
             )
+            self._page_buttons[page] = button
+            if page == "home":
+                button.clicked.connect(self.home_requested.emit)
+            elif page == "profile":
+                button.clicked.connect(self.profile_requested.emit)
             layout.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
             buttons.append(button)
 
@@ -87,3 +97,8 @@ class Sidebar(QFrame):
     def _select(selected: QToolButton, buttons: list[QToolButton]) -> None:
         for button in buttons:
             button.setChecked(button is selected)
+
+    def set_active_page(self, page: str) -> None:
+        selected = self._page_buttons.get(page)
+        if selected is not None:
+            self._select(selected, list(self._page_buttons.values()))

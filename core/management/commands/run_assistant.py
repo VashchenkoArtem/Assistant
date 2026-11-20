@@ -47,6 +47,7 @@ from utils.file_explorer import (
 )
 from utils.text_similarity import similarity
 from utils.transliterate import transliterate
+from utils.llm_client import ask_llm
 from core.response_analysis import (
     DialogContext,
     DialogState,
@@ -61,6 +62,10 @@ from core.response_analysis import (
 logger = logging.getLogger(__name__)
 
 CANCEL_ACTION_WORDS = ("скасуй", "скасувати", "скасовую", "відміна", "відміни", "відмінити")
+LLM_TRIGGER_PATTERN = re.compile(
+    r"^\s*(?:/ai|ші|спитай|запитання)\b\s*",
+    re.IGNORECASE,
+)
 APP_COMMAND_PATTERN = re.compile(
     r"\b(?P<verb>відкрий|відкрити|відкривай|відкривати|"
     r"закрий|закрити|закривай|закривати)\b",
@@ -300,6 +305,14 @@ class Command(BaseCommand):
             if pending_file.get("awaiting_explorer_folder_name"):
                 self.handle_explorer_folder_name(text)
                 return
+        trigger_match = LLM_TRIGGER_PATTERN.match(text)
+        if trigger_match is not None:
+            prompt = text[trigger_match.end():].lstrip(" \t.,!?;:-").strip()
+            if len(prompt) < 3:
+                self.stdout.write("Введіть запит після команди або ключового слова")
+            else:
+                self.stdout.write(ask_llm(prompt))
+            return
         if any(keyword in lowered for keyword in ["пауза"]):
             self.pause_assistant()
             return

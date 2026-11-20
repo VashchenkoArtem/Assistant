@@ -7,20 +7,34 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from PyQt6.QtCore import QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, pyqtSignal
 from PyQt6.QtGui import QIcon, QKeyEvent, QMouseEvent, QPixmap, QResizeEvent, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
     QMainWindow,
     QPushButton,
+    QSplitter,
     QScrollArea,
-    QSizePolicy,
+    QStackedWidget,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QMessageBox,
 )
 
 from .icon_loader import icon_path as resolve_icon_path, load_pixmap
 from .widgets.chat_widgets import ChatCard
+from .widgets.chat_panel import ChatPanel
+from .widgets.composer import Composer
+from .widgets.llm_settings_dialog import LLMSettingsPanel
+from .widgets.search_bar import SearchBar
+from .widgets.sidebar import Sidebar
+from .widgets.title_bar import TitleBar
+from utils.llm_config import LLMConfigError
 from utils.voicing_answer import GUI_TEXT_MODE, interrupt_voice
 
 
@@ -283,8 +297,6 @@ class VoiceWorker(QRunnable):
 class MainWindow(QMainWindow):
     """Coordinates the window components and assistant command state."""
 
-    BACKEND_URL = "http://127.0.0.1:8765"
-
     def __init__(self, command: Any | None = None) -> None:
         super().__init__()
         self.setWindowTitle("Поліна")
@@ -305,13 +317,19 @@ class MainWindow(QMainWindow):
         self._voice_worker: VoiceWorker | None = None
         self._voice_status_card: ChatCard | None = None
         self._voice_stopped_card: ChatCard | None = None
-        self._initialization_worker: BackendHealthWorker | None = None
+        self._initialization_worker: InitializationWorker | None = None
         self._initialization_status_card: ChatCard | None = None
-        self._initializing = True
+        self._command = command
+        self._initializing = command is None
 
         self.chat = ChatPanel()
+        self._chat_layout = self.chat.chat_layout
+        self._chat_scroll = self.chat.scroll_area
         self.search = SearchBar()
         self.composer = Composer()
+        self._content_stack = QStackedWidget()
+        self._chat_page = QWidget()
+        self._settings_panel: LLMSettingsPanel | None = None
         self._build_ui()
 
         self.search.submitted.connect(self.send_message)
@@ -323,15 +341,22 @@ class MainWindow(QMainWindow):
         shortcut.activated.connect(self.start_microphone_input)
         self._microphone_shortcut = shortcut
 
-        self._initialization_status_card = self._add_chat_card(
-            "System",
-            "Підключення до асистента...",
-            status="Initializing",
-        )
-        self._set_commands_enabled(False)
-        self._initialization_worker = BackendHealthWorker(self.BACKEND_URL)
-        self._initialization_worker.signals.finished.connect(self._backend_initialized)
-        self._thread_pool.start(self._initialization_worker)
+        if command is None:
+            self._initialization_status_card = self._add_chat_card(
+                "System",
+                "Підключення до асистента...",
+                status="Initializing",
+            )
+            self._set_commands_enabled(False)
+            project_root = Path(__file__).resolve().parents[1]
+            self._initialization_worker = InitializationWorker(project_root)
+            self._initialization_worker.signals.finished.connect(
+                self._assistant_initialized
+            )
+            self._thread_pool.start(self._initialization_worker)
+        else:
+            self._initialization_worker = None
+            self._set_commands_enabled(True)
 
     # ============================ РОБОТА З ІКОНКАМИ ============================
     def icon_path(self, name: str) -> Path:
@@ -361,22 +386,54 @@ class MainWindow(QMainWindow):
         body = QSplitter(Qt.Orientation.Horizontal)
         body.setHandleWidth(4)
         body.setChildrenCollapsible(False)
-        body.addWidget(Sidebar())
+        self.sidebar = Sidebar()
+        self.sidebar.profile_requested.connect(self.open_personalization)
+        self.sidebar.home_requested.connect(self.show_chat)
+        body.addWidget(self.sidebar)
 
-        main_panel = QWidget()
-        main_layout = QVBoxLayout(main_panel)
+        main_layout = QVBoxLayout(self._chat_page)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         main_layout.addWidget(self.search)
         main_layout.addWidget(self.chat, 1)
         main_layout.addWidget(self.composer)
-        body.addWidget(main_panel)
+        self._content_stack.addWidget(self._chat_page)
+        body.addWidget(self._content_stack)
         body.setStretchFactor(0, 0)
         body.setStretchFactor(1, 1)
         body.setSizes([63, 845])
         root_layout.addWidget(body, 1)
 
         self.setCentralWidget(root)
+
+    def open_personalization(self) -> None:
+        try:
+            if self._settings_panel is None:
+                self._settings_panel = LLMSettingsPanel(self._content_stack)
+                self._settings_panel.back_requested.connect(self.show_chat)
+                self._content_stack.addWidget(self._settings_panel)
+        except LLMConfigError as error:
+            QMessageBox.critical(self, "Помилка налаштувань LLM", str(error))
+            self.sidebar.set_active_page("home")
+            return
+        self._content_stack.setCurrentWidget(self._settings_panel)
+        self.sidebar.set_active_page("profile")
+
+    def show_chat(self) -> None:
+        self._content_stack.setCurrentWidget(self._chat_page)
+        self.sidebar.set_active_page("home")
+
+    def _assistant_initialized(self, command: object, error: object) -> None:
+        if error is not None or command is None:
+            message = str(error or "Не вдалося ініціалізувати асистента.")
+            self._remove_initialization_status_card()
+            self._add_chat_card("System", message)
+            return
+
+        self._command = command
+        self._initializing = False
+        self._remove_initialization_status_card()
+        self._set_commands_enabled(True)
 
     # ============================ ВЕРХНЯ ПАНЕЛЬ / TITLE BAR ============================
     def _create_title_bar(self) -> QWidget:
@@ -598,6 +655,9 @@ class MainWindow(QMainWindow):
         self._scroll_chat_to_bottom()
         return card
 
+    def _scroll_chat_to_bottom(self) -> None:
+        self.chat.scroll_to_bottom()
+
     def _remove_chat_card(self, card: ChatCard | None) -> None:
         if card is None:
             return
@@ -788,20 +848,11 @@ class MainWindow(QMainWindow):
         self._initialization_status_card = None
 
     def _set_commands_enabled(self, enabled: bool) -> None:
-        if self._prompt_input is not None:
-            self._prompt_input.setEnabled(enabled)
-        if self._search_field is not None:
-            self._search_field.setEnabled(enabled)
-        if self._keyboard_button is not None:
-            self._keyboard_button.setEnabled(enabled)
-        if self._mic_button is not None:
-            self._mic_button.setEnabled(enabled)
+        self.search.setEnabled(enabled)
+        self.composer.set_prompt_enabled(enabled)
 
     def _set_microphone_icon(self, active: bool) -> None:
-        if self._mic_button is None:
-            return
-        icon_name = "controls/micro.svg" if active else "controls/micro_off.svg"
-        self._mic_button.setIcon(self.make_icon(icon_name, 20))
+        self.composer.set_microphone_active(active)
 
     # ============================ РЯДОК ПОШУКУ НАД ЧАТОМ ============================
     def _create_search_bar(self) -> QWidget:

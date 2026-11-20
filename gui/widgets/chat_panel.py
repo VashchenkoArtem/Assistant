@@ -55,10 +55,10 @@ class ChatPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.scroll = QScrollArea()
-        self.scroll.setObjectName("chatScroll")
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("chatScroll")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         viewport = QWidget()
         viewport.setObjectName("chatViewport")
@@ -67,8 +67,8 @@ class ChatPanel(QWidget):
         self.chat_layout.setSpacing(8)
         self.chat_layout.addStretch()
 
-        self.scroll.setWidget(viewport)
-        layout.addWidget(self.scroll, 1)
+        self.scroll_area.setWidget(viewport)
+        layout.addWidget(self.scroll_area, 1)
 
     def add_card(
         self,
@@ -96,7 +96,7 @@ class ChatPanel(QWidget):
 
     def scroll_to_bottom(self) -> None:
         self.chat_layout.activate()
-        scrollbar = self.scroll.verticalScrollBar()
+        scrollbar = self.scroll_area.verticalScrollBar()
         if scrollbar is not None:
             scrollbar.setValue(scrollbar.maximum())
             QTimer.singleShot(0, lambda: scrollbar.setValue(scrollbar.maximum()))
