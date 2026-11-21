@@ -74,7 +74,12 @@ class CommandWorker(QRunnable):
                 return
             self.signals.finished.emit(self.text, str(result.get("output", "")).strip())
         except Exception:
-            self.signals.error.emit("Команду не вдалося виконати. Спробуйте ще раз.")
+            self.signals.finished.emit(
+    self.text,
+    str(result.get("output", "")).strip(),
+    bool(result.get("has_pending", False)),
+)
+
 
 
 class VoiceWorker(QRunnable):
@@ -111,3 +116,35 @@ class VoiceWorker(QRunnable):
                         continue
         except Exception as error:
             self.signals.error.emit(str(error))
+class CancelCommandWorker(QRunnable):
+    def __init__(self, backend_url: str) -> None:
+        super().__init__()
+        self.backend_url = backend_url
+
+    def run(self) -> None:
+        try:
+            payload = json.dumps(
+                {"text": self.text, "speak_answer": self.speak_answer},
+                ensure_ascii=False,
+            ).encode("utf-8")
+            request = url_request.Request(
+                f"{self.backend_url}/api/assistant/command/",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with url_request.urlopen(request, timeout=30) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            if not result.get("ok"):
+                self.signals.error.emit(
+                    result.get("message", "Команду не вдалося виконати.")
+                )
+                return
+            self.signals.finished.emit(
+                self.text,
+                str(result.get("output", "")).strip(),
+                bool(result.get("has_pending", False)),
+            )
+        except Exception:
+            self.signals.error.emit("Команду не вдалося виконати. Спробуйте ще раз.")
+

@@ -1,3 +1,4 @@
+from PyQt6.QtWidgets import QTextEdit
 import contextlib
 import io
 import os
@@ -10,14 +11,28 @@ from typing import Any, cast
 from PyQt6.QtCore import QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QKeyEvent, QMouseEvent, QPixmap, QResizeEvent, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
     QMainWindow,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
+from .widgets.chat_panel import ChatPanel
+from .widgets.composer import Composer
+from .widgets.search_bar import SearchBar
+from .widgets.sidebar import Sidebar
+from .widgets.title_bar import TitleBar
+from .workers import BackendHealthWorker, CommandWorker, VoiceWorker, CancelCommandWorker
+
+
 
 from .icon_loader import icon_path as resolve_icon_path, load_pixmap
 from .widgets.chat_widgets import ChatCard
@@ -122,7 +137,7 @@ ChatCard { border-radius: 7px; }
 
 
 class CommandSignals(QObject):
-    finished = pyqtSignal(str, object)
+    finished = pyqtSignal(str, object, bool)
     error = pyqtSignal(str)
     model_loading = pyqtSignal(bool)
 
@@ -175,73 +190,6 @@ class InitializationWorker(QRunnable):
             self.result_error = str(error)
             self.signals.finished.emit(None, str(error))
 
-
-class CommandWorker(QRunnable):
-    """Runs one assistant command outside the Qt UI thread."""
-
-    def __init__(
-        self,
-        command: Any,
-        text: str,
-        speak_answer: bool = False,
-        cancel_event: threading.Event | None = None,
-    ) -> None:
-        super().__init__()
-        self.command = command
-        self.text = text
-        self.speak_answer = speak_answer
-        self.cancel_event = (
-            cancel_event if cancel_event is not None else threading.Event()
-        )
-        self.signals = CommandSignals()
-
-    def run(self) -> None:
-        buffer = io.StringIO()
-        semantic_analyzer = getattr(
-            getattr(
-                getattr(self.command, "response_analyzer", None),
-                "decision_engine",
-                None,
-            ),
-            "semantic_analyzer",
-            None,
-        )
-        set_loading_callback = getattr(
-            semantic_analyzer,
-            "set_model_loading_callback",
-            None,
-        )
-        previous_loading_callback = (
-            set_loading_callback(self.signals.model_loading.emit)
-            if callable(set_loading_callback)
-            else None
-        )
-        try:
-            from django.core.management.base import OutputWrapper
-
-            self.command.stdout = OutputWrapper(buffer)
-            self.command.cancel_event = self.cancel_event
-            if not self.speak_answer:
-                GUI_TEXT_MODE.set()
-            else:
-                GUI_TEXT_MODE.clear()
-            with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
-                try:
-                    if self.cancel_event.is_set():
-                        raise InterruptedError
-                    self.command.process_recognized_command(self.text)
-                except InterruptedError:
-                    print("Команду скасовано.")
-            output = buffer.getvalue().strip()
-            self.signals.finished.emit(self.text, output)
-        except Exception as error:
-            self.signals.error.emit(str(error))
-        finally:
-            if callable(set_loading_callback):
-                set_loading_callback(previous_loading_callback)
-            GUI_TEXT_MODE.clear()
-
-
 class VoiceWorker(QRunnable):
     """Keeps listening for microphone phrases until it is stopped."""
 
@@ -283,7 +231,7 @@ class VoiceWorker(QRunnable):
 class MainWindow(QMainWindow):
     """Coordinates the window components and assistant command state."""
 
-    BACKEND_URL = "http://127.0.0.1:8765"
+    BACKEND_URL = "http://127.0.0.1:8000"
 
     def __init__(self, command: Any | None = None) -> None:
         super().__init__()
@@ -318,6 +266,7 @@ class MainWindow(QMainWindow):
         self.composer.submitted.connect(self.send_message)
         self.search.microphone_requested.connect(self.start_microphone_input)
         self.composer.microphone_requested.connect(self.start_microphone_input)
+        self.composer.stop_requested.connect(self.cancel_current_command)
 
         shortcut = QShortcut(QKeySequence("Ctrl+M"), self)
         shortcut.activated.connect(self.start_microphone_input)
@@ -332,6 +281,31 @@ class MainWindow(QMainWindow):
         self._initialization_worker = BackendHealthWorker(self.BACKEND_URL)
         self._initialization_worker.signals.finished.connect(self._backend_initialized)
         self._thread_pool.start(self._initialization_worker)
+        
+    def _backend_initialized(self, ok: bool, message: str | None) -> None:
+        self._initializing = False
+        self._initialization_worker = None
+        if self._initialization_status_card is not None:
+            self._remove_chat_card(self._initialization_status_card)
+            self._initialization_status_card = None
+
+        if ok:
+            self._set_commands_enabled(True)
+            self._add_chat_card(
+                "System",
+                "Асистент готовий до роботи.",
+                status="Ready",
+            )
+            if self._command_queue:
+                next_text, next_speak = self._command_queue.pop(0)
+                self.send_message(next_text, speak_answer=next_speak)
+        else:
+            self._set_commands_enabled(True)
+            self._add_chat_card(
+                "System",
+                message or "Бекенд асистента недоступний. Запустіть Django у окремому терміналі.",
+                status="Error",
+            )
 
     # ============================ РОБОТА З ІКОНКАМИ ============================
     def icon_path(self, name: str) -> Path:
@@ -373,7 +347,7 @@ class MainWindow(QMainWindow):
         body.addWidget(main_panel)
         body.setStretchFactor(0, 0)
         body.setStretchFactor(1, 1)
-        body.setSizes([63, 845])
+        body.setSizes([72, 845])
         root_layout.addWidget(body, 1)
 
         self.setCentralWidget(root)
@@ -577,26 +551,12 @@ class MainWindow(QMainWindow):
         status: str | None = None,
         loading: bool = False,
     ) -> ChatCard:
-        if self._chat_layout is None:
-            raise RuntimeError("Chat area is not initialized")
-
-        icon_name = "chat/user_ico.svg" if is_user else "chat/bot_ico.svg"
-        if author == "System":
-            icon_name = "chat/info.svg"
-        card = ChatCard(
-            author,
-            body.strip(),
-            datetime.now().strftime("%H:%M"),
-            str(self.icon_path(icon_name)),
+        return self.chat.add_card(
+            author=author,
+            body=body,
             is_user=is_user,
             status=status,
-            status_icon=str(self.icon_path("status/status.svg")) if status else None,
-            loading=loading,
         )
-        insert_at = max(0, self._chat_layout.count() - 1)
-        self._chat_layout.insertWidget(insert_at, card)
-        self._scroll_chat_to_bottom()
-        return card
 
     def _remove_chat_card(self, card: ChatCard | None) -> None:
         if card is None:
@@ -626,34 +586,20 @@ class MainWindow(QMainWindow):
         self._remove_voice_stopped_card()
         self._add_chat_card("User", text, is_user=True)
         if self._command_busy:
-            is_cancel_action = getattr(self._command, "is_cancel_action", None)
-            if (
-                self._command_cancel_event is not None
-                and callable(is_cancel_action)
-                and is_cancel_action(text)
-            ):
-                self._command_cancel_event.set()
-                interrupt_voice()
-                self._add_chat_card("System", "Скасовую виконання поточної команди...")
-            else:
-                self._command_queue.append((text, speak_answer))
+            self._command_queue.append((text, speak_answer))
             return
 
         self._start_command(text, speak_answer)
 
     def _start_command(self, text: str, speak_answer: bool = False) -> None:
         self._command_busy = True
-        cancel_event = threading.Event()
-        self._command_cancel_event = cancel_event
         worker = CommandWorker(
-            self._command,
+            self.BACKEND_URL,
             text,
             speak_answer=speak_answer,
-            cancel_event=cancel_event,
         )
         worker.signals.finished.connect(self._command_finished)
         worker.signals.error.connect(self._command_failed)
-        worker.signals.model_loading.connect(self._set_model_loading)
         self._thread_pool.start(worker)
 
     def _set_model_loading(self, loading: bool) -> None:
@@ -666,6 +612,14 @@ class MainWindow(QMainWindow):
                 )
             return
         self._remove_model_loading_card()
+    def cancel_current_command(self) -> None:
+        self._command_queue.clear()
+        if self._command_busy:
+            self._thread_pool.start(CancelCommandWorker(self.BACKEND_URL))
+            self._add_chat_card("User", "відміна", is_user=True)
+            self._start_command("відміна")
+        else:
+            self.send_message("відміна")
 
     def _remove_model_loading_card(self) -> None:
         if self._model_loading_card is None:
@@ -676,39 +630,11 @@ class MainWindow(QMainWindow):
         self._model_loading_card.deleteLater()
         self._model_loading_card = None
 
-    def _command_finished(self, _text: str, output: object) -> None:
+    def _command_finished(self, _text: str, output: object, has_pending: bool = False) -> None:
         self._remove_model_loading_card()
-        cancel_requested = (
-            self._command_cancel_event is not None
-            and self._command_cancel_event.is_set()
-        )
         self._command_busy = False
         self._command_cancel_event = None
-        if cancel_requested and self._command is not None:
-            has_pending_action = any(
-                getattr(self._command, attribute, None) is not None
-                for attribute in (
-                    "pending_app",
-                    "pending_file",
-                    "pending_explorer_tabs",
-                    "pending_explorer_windows",
-                    "pending_learning_candidate",
-                )
-            )
-            cancel_pending_action = getattr(
-                self._command,
-                "cancel_pending_action",
-                None,
-            )
-            if has_pending_action and callable(cancel_pending_action):
-                cancel_pending_action(silent=True)
-                output = "Команду скасовано."
-            elif "Команду скасовано." not in str(output):
-                output = (
-                    f"{output}\nКоманда вже завершилася до запиту на скасування."
-                    if output
-                    else "Команда вже завершилася до запиту на скасування."
-                )
+        self.composer.set_stop_enabled(has_pending or bool(self._command_queue))
         lines = str(output).strip().splitlines() if output else []
         lines = [
             line.strip()
@@ -718,6 +644,7 @@ class MainWindow(QMainWindow):
         if lines:
             self._add_chat_card("Поліна", "\n".join(lines))
         self._start_next_queued_command()
+
 
     def _command_failed(self, message: str) -> None:
         self._remove_model_loading_card()
@@ -788,14 +715,13 @@ class MainWindow(QMainWindow):
         self._initialization_status_card = None
 
     def _set_commands_enabled(self, enabled: bool) -> None:
-        if self._prompt_input is not None:
-            self._prompt_input.setEnabled(enabled)
-        if self._search_field is not None:
-            self._search_field.setEnabled(enabled)
-        if self._keyboard_button is not None:
-            self._keyboard_button.setEnabled(enabled)
-        if self._mic_button is not None:
-            self._mic_button.setEnabled(enabled)
+        self.composer.set_prompt_enabled(enabled)
+        if hasattr(self.search, "set_search_enabled"):
+            self.search.set_search_enabled(enabled)
+        elif hasattr(self.search, "field"):
+            self.search.field.setEnabled(enabled)
+        else:
+            self.search.setEnabled(enabled)
 
     def _set_microphone_icon(self, active: bool) -> None:
         if self._mic_button is None:
@@ -932,3 +858,4 @@ class MainWindow(QMainWindow):
                 button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
                 button.setFixedSize(56, 56)
                 layout.setAlignment(button, Qt.AlignmentFlag.AlignHCenter)
+

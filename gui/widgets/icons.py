@@ -12,8 +12,12 @@ def icon_path(name: str) -> Path:
     png_path = ASSETS_DIR / "png" / f"{Path(name).stem}.png"
     if png_path.exists():
         return png_path
-    return ASSETS_DIR / name
-
+    direct = ASSETS_DIR / name
+    if direct.exists():
+        return direct
+    for match in (ASSETS_DIR / "icons").rglob(Path(name).name):
+        return match
+    return direct
 
 def make_pixmap(name: str, size: int) -> QPixmap:
     path = icon_path(name)

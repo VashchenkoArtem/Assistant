@@ -60,6 +60,8 @@ def assistant_command(request: HttpRequest) -> JsonResponse:
         with _command_lock:
             from django.core.management.base import OutputWrapper
             command.stdout = OutputWrapper(buffer)
+            if hasattr(command, "cancel_event") and command.cancel_event is not None:
+                command.cancel_event.clear()
 
             if speak_answer:
                 GUI_TEXT_MODE.clear()
@@ -69,15 +71,32 @@ def assistant_command(request: HttpRequest) -> JsonResponse:
             with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
                 command.process_recognized_command(text)
 
+            has_pending = any(
+                getattr(command, attr, None) is not None
+                for attr in (
+                    "pending_app",
+                    "pending_file",
+                    "pending_explorer_tabs",
+                    "pending_explorer_windows",
+                    "pending_learning_candidate",
+                )
+            )
+
         output = buffer.getvalue().strip()
         lines = [
             line.strip()
             for line in output.splitlines()
             if line.strip() and not line.strip().startswith("Ви сказали:")
         ]
-        return JsonResponse({"ok": True, "output": "\n".join(lines)})
-    except Exception as error:
-        logger.warning("Assistant command failed: %s", type(error).__name__)
+        return JsonResponse(
+            {
+                "ok": True,
+                "output": "\n".join(lines),
+                "has_pending": has_pending,
+            }
+        )
+    except Exception:
+        logger.exception("Assistant command failed")
         return JsonResponse(
             {
                 "ok": False,
@@ -87,3 +106,21 @@ def assistant_command(request: HttpRequest) -> JsonResponse:
         )
     finally:
         GUI_TEXT_MODE.clear()
+
+
+@csrf_exempt
+@require_POST
+def assistant_cancel(_request: HttpRequest) -> JsonResponse:
+    try:
+        command = _get_command()
+        if hasattr(command, "cancel_event") and command.cancel_event is not None:
+            command.cancel_event.set()
+        try:
+            from utils.voicing_answer import interrupt_voice
+            interrupt_voice()
+        except Exception:
+            pass
+        return JsonResponse({"ok": True})
+    except Exception:
+        logger.exception("Assistant cancel failed")
+        return JsonResponse({"ok": False}, status=500)

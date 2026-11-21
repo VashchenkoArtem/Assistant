@@ -17,10 +17,12 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 
-from core.views import assistant_command, assistant_health
+from core.views import assistant_cancel, assistant_command, assistant_health
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/assistant/health/', assistant_health),
     path('api/assistant/command/', assistant_command),
+    path('api/assistant/cancel/', assistant_cancel),
 ]
+

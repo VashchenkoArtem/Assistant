@@ -2,6 +2,7 @@ import os
 import platform
 import re
 from collections.abc import Iterable
+import threading
 
 from utils.text_similarity import partial_similarity, similarity
 from utils.transliterate import transliterate
@@ -204,6 +205,7 @@ def find_file_targets(
     target: str,
     roots: Iterable[str] | None = None,
     expected_kind: str | None = None,
+    cancellation_event: threading.Event | None = None,
 ) -> list[str]:
     cleaned_target = _clean_target(target)
     if not cleaned_target:
@@ -244,9 +246,13 @@ def find_file_targets(
     found: list[str] = []
     seen: set[str] = set()
     for root in roots if roots is not None else _search_roots():
+        if cancellation_event is not None and cancellation_event.is_set():
+            raise InterruptedError
         if not os.path.isdir(root):
             continue
         for path in _iter_targets(root):
+            if cancellation_event is not None and cancellation_event.is_set():
+                raise InterruptedError
             if not _matches_target_name(path, target_name):
                 continue
             if not _is_expected_kind(path, expected_kind):
@@ -260,7 +266,13 @@ def find_file_targets(
     return found
 
 
-def find_file_targets_in_folder(target: str, folder: str) -> list[str]:
+
+def find_file_targets_in_folder(
+    target: str,
+    folder: str,
+    cancellation_event: threading.Event | None = None,
+) -> list[str]:
+    _raise_if_cancelled(cancellation_event)
     cleaned_target = _clean_target(target)
     if not cleaned_target or not os.path.isdir(folder):
         return []
@@ -269,24 +281,24 @@ def find_file_targets_in_folder(target: str, folder: str) -> list[str]:
     if not target_name:
         return []
 
+    matches: list[str] = []
     with os.scandir(folder) as entries:
-        matches = sorted(
-            (
-                entry.path
-                for entry in entries
-                if entry.is_file(follow_symlinks=False)
-                and _matches_target_name(entry.path, target_name)
-            ),
-            key=str.casefold,
-        )
+        for entry in entries:
+            _raise_if_cancelled(cancellation_event)
+            if entry.is_file(follow_symlinks=False) and _matches_target_name(
+                entry.path, target_name
+            ):
+                matches.append(entry.path)
+    matches.sort(key=str.casefold)
     return matches[:MAX_RESULTS]
-
 
 def find_similar_file_targets(
     target: str,
     roots: Iterable[str] | None = None,
     expected_kind: str | None = None,
+    cancellation_event: threading.Event | None = None,
 ) -> list[str]:
+    _raise_if_cancelled(cancellation_event)
     target_name = os.path.basename(_clean_target(target).rstrip("\\/"))
     query = _normalized_name(os.path.splitext(target_name)[0])
     if len(query) < 3:
@@ -296,14 +308,14 @@ def find_similar_file_targets(
     seen: set[str] = set()
     ranked_paths: set[str] = set()
     for root in roots if roots is not None else _search_roots():
+        _raise_if_cancelled(cancellation_event)
         if not os.path.isdir(root):
             continue
         for path in _iter_targets(root):
+            _raise_if_cancelled(cancellation_event)
             if not _is_expected_kind(path, expected_kind):
                 continue
-            canonical_path = os.path.normcase(os.path.abspath(path))
-            if canonical_path in seen:
-                continue
+
             seen.add(canonical_path)
 
             candidate_name = os.path.basename(path)
@@ -325,7 +337,9 @@ def find_similar_file_targets(
             if candidate.startswith(query):
                 score = max(score, 0.9)
             candidate_threshold = (
-                0.5 if _contains_cyrillic(query) ^ _contains_cyrillic(candidate) else SIMILARITY_THRESHOLD
+                0.5
+                if _contains_cyrillic(query) ^ _contains_cyrillic(candidate)
+                else SIMILARITY_THRESHOLD
             )
             if score >= candidate_threshold:
                 ranked.append((score, path))
@@ -333,6 +347,7 @@ def find_similar_file_targets(
 
     if expected_kind != "file":
         for alias, folder_name in LOCATION_ALIASES.items():
+            _raise_if_cancelled(cancellation_event)
             if folder_name not in SEARCH_FOLDER_NAMES:
                 continue
 
@@ -363,3 +378,60 @@ def find_similar_file_targets(
 
     ranked.sort(key=lambda item: (-item[0], item[1].casefold()))
     return [path for _score, path in ranked[:MAX_RESULTS]]
+
+def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise InterruptedError("Пошук файлів скасовано.")
+
+def find_named_file_targets(
+    target: str,
+    roots: Iterable[str] | None = None,
+    cancellation_event: threading.Event | None = None,
+) -> list[str]:
+    _raise_if_cancelled(cancellation_event)
+    cleaned_target = _clean_target(target)
+    if not cleaned_target:
+        return []
+
+    expanded_target = os.path.expandvars(os.path.expanduser(cleaned_target))
+    if os.path.isfile(expanded_target):
+        return [os.path.abspath(expanded_target)]
+
+    target_name = os.path.basename(cleaned_target.rstrip("\\/"))
+    if not target_name:
+        return []
+
+    search_roots = roots if roots is not None else _folder_bases()
+    found: list[str] = []
+    seen: set[str] = set()
+    for root in search_roots:
+        if not os.path.isdir(root):
+            continue
+        for path in _iter_targets(
+            root,
+            max_depth=None,
+            cancellation_event=cancellation_event,
+        ):
+            if not os.path.isfile(path) or not _matches_target_name(path, target_name):
+                continue
+            canonical_path = os.path.normcase(os.path.abspath(path))
+            if canonical_path in seen:
+                continue
+            seen.add(canonical_path)
+            found.append(path)
+            if len(found) >= MAX_RESULTS:
+                return found
+    return found
+
+FIND_FILE_COMMAND = re.compile(
+    r"\b(?:знайди|знайти|відшукай|відшукати)\s+"
+    r"(?:файл(?:и|ів)?|документ(?:и|ів)?)\s*(?P<target>.*)$",
+    re.IGNORECASE,
+)
+
+
+def parse_find_file_command(text: str) -> str | None:
+    match = FIND_FILE_COMMAND.search(text)
+    if match is None:
+        return None
+    return _clean_target(match.group("target"))

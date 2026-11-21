@@ -35,9 +35,9 @@ numpy==2.5.3
 packaging==26.3
 pluggy==1.6.0
 propcache==0.5.4
-PyAudio==0.2.14
+#PyAudio==0.2.14
 pycparser==3.0
-pygame==2.6.1
+pygame-ce
 PyQt6>=6.8,<7.0
 Pygments==2.21.0
 pytest==9.1.1

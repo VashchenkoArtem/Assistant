@@ -30,8 +30,10 @@ from utils.file_explorer.targets import (
     _standard_folder_path,
     find_file_targets,
     find_file_targets_in_folder,
+    find_named_file_targets,
     find_similar_file_targets,
     is_current_folder_request,
+    parse_find_file_command,
     parse_open_target_command,
 )
 from utils.file_explorer.windows import (

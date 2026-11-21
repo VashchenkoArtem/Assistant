@@ -1,4 +1,3 @@
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -6,6 +5,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 
 from .icons import make_icon
 from .input import AutoResizeTextEdit
@@ -22,7 +22,30 @@ STYLE = """
     border-radius: 6px;
     min-height: 50px;
 }
-#micButton, #keyboardButton {
+#stopButton {
+    border: 1px solid #3c4d7a;
+    border-radius: 6px;
+    background: #1f2b47;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: bold;
+    min-width: 28px;
+    min-height: 28px;
+    max-width: 28px;
+    max-height: 28px;
+    padding: 0px;
+}
+#stopButton:hover:enabled {
+    background: #36202c;
+    border-color: #d95364;
+    color: #ff9aa6;
+}
+#stopButton:disabled {
+    border: 1px solid #141a2b;
+    background: #0a0f1c;
+    color: #323c56;
+}
+#micButton {
     border: none;
     background: transparent;
     color: #9aa5c1;
@@ -35,6 +58,7 @@ STYLE = """
 class Composer(QWidget):
     submitted = pyqtSignal(str)
     microphone_requested = pyqtSignal()
+    stop_requested = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -51,15 +75,34 @@ class Composer(QWidget):
         composer.setObjectName("composer")
         composer_layout = QHBoxLayout(composer)
         composer_layout.setContentsMargins(12, 4, 12, 4)
-        composer_layout.setSpacing(8)
+        composer_layout.setSpacing(10)
 
-        self.keyboard = QPushButton()
-        self.keyboard.setIcon(make_icon("system_enter.svg", 20))
-        self.keyboard.setIconSize(QSize(20, 20))
-        self.keyboard.setObjectName("keyboardButton")
-        self.keyboard.setFixedSize(32, 32)
-        self.keyboard.clicked.connect(self._submit)
-        composer_layout.addWidget(self.keyboard, 0, Qt.AlignmentFlag.AlignBottom)
+        self.stop_button = QPushButton("✕")
+        self.stop_button.setObjectName("stopButton")
+        self.stop_button.setToolTip("Зупинити команду")
+        self.stop_button.setFixedSize(28, 28)
+        self.stop_button.setEnabled(True)
+        self.stop_button.setStyleSheet(
+            """
+            QPushButton {
+                border: 1px solid #2b3550;
+                border-radius: 6px;
+                background: #141c30;
+                color: #d6daf0;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background: #36202c;
+                border-color: #d95364;
+                color: #ff9aa6;
+            }
+            """
+        )
+        self.stop_button.clicked.connect(self.stop_requested.emit)
+        composer_layout.addWidget(self.stop_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
 
         self.prompt = AutoResizeTextEdit()
         self.prompt.submitted.connect(self._submit)
@@ -71,7 +114,8 @@ class Composer(QWidget):
         self.microphone.setObjectName("micButton")
         self.microphone.setFixedSize(32, 32)
         self.microphone.clicked.connect(self.microphone_requested.emit)
-        composer_layout.addWidget(self.microphone, 0, Qt.AlignmentFlag.AlignBottom)
+        composer_layout.addWidget(self.microphone, 0, Qt.AlignmentFlag.AlignVCenter)
+
 
         layout.addWidget(composer, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -91,7 +135,10 @@ class Composer(QWidget):
     def set_prompt_enabled(self, enabled: bool) -> None:
         self.prompt.setEnabled(enabled)
         self.microphone.setEnabled(enabled)
-        self.keyboard.setEnabled(enabled)
+
+    def set_stop_enabled(self, enabled: bool) -> None:
+        self.stop_button.setEnabled(True)
+
 
     def set_microphone_active(self, active: bool) -> None:
         icon_name = "micro.svg" if active else "micro_off.svg"
