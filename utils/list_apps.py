@@ -3,7 +3,6 @@ import os
 import platform
 import re
 import subprocess
-from functools import lru_cache
 
 
 TECHNICAL_APP_NAME = re.compile(
@@ -98,7 +97,6 @@ def search_dirs_and_extentions():
 
 
     # Добавил кэширование списка приложений(по совету ии), поэтому теперь сканирование диска происходит только один раз, а все последующие запросы списка работают мгновенно
-@lru_cache(maxsize=1)
 def get_list_installed_apps():
     installed_apps = {}
 

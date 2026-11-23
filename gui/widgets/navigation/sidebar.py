@@ -1,12 +1,11 @@
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
-    QPushButton,
     QToolButton,
     QVBoxLayout,
 )
 
-from .icons import make_icon
+from ..common.icons import make_icon
 
 
 STYLE = """
@@ -49,7 +48,8 @@ class Sidebar(QFrame):
         super().__init__()
         self.setObjectName("sidebar")
         self.setMinimumWidth(63)
-        self.setMaximumWidth(220)
+        self.setMaximumWidth(63)
+        self.setFixedWidth(63)
         self.setStyleSheet(STYLE)
 
         layout = QVBoxLayout(self)
@@ -59,9 +59,9 @@ class Sidebar(QFrame):
         buttons: list[QToolButton] = []
         self._page_buttons: dict[str, QToolButton] = {}
         for page, icon_name, active, tooltip in (
-            ("home", "home.svg", True, "Головна"),
-            ("profile", "user_ico.svg", False, "Персоналізація"),
-            ("settings", "settings.svg", False, "Налаштування"),
+            ("home", "navigation/home.svg", True, "Головна"),
+            ("profile", "chat/user_ico.svg", False, "Персоналізація"),
+            ("settings", "navigation/settings.svg", False, "Налаштування"),
         ):
             button = QToolButton()
             button.setIcon(make_icon(icon_name, 22))
@@ -83,15 +83,6 @@ class Sidebar(QFrame):
             buttons.append(button)
 
         layout.addStretch(1)
-        language_button = QPushButton("УКР")
-        language_button.setObjectName("languageButton")
-        language_button.setFixedSize(56, 40)
-        language_button.clicked.connect(
-            lambda: language_button.setText(
-                "ENG" if language_button.text() == "УКР" else "УКР"
-            )
-        )
-        layout.addWidget(language_button, 0, Qt.AlignmentFlag.AlignHCenter)
 
     @staticmethod
     def _select(selected: QToolButton, buttons: list[QToolButton]) -> None:

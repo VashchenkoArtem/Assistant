@@ -33,10 +33,10 @@ from utils.llm_config import (
 )
 
 
-class AddOpenAIProviderDialog(QDialog):
+class AddProviderDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Додати OpenAI-сумісний API")
+        self.setWindowTitle("Додати API провайдера")
         self.provider_config: ProviderSettings | None = None
 
         layout = QVBoxLayout(self)
@@ -99,8 +99,12 @@ class AddOpenAIProviderDialog(QDialog):
         self.accept()
 
 
+AddOpenAIProviderDialog = AddProviderDialog
+
+
 class LLMSettingsPanel(QWidget):
     back_requested = pyqtSignal()
+    saved = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -112,6 +116,7 @@ class LLMSettingsPanel(QWidget):
         self._key_lists: dict[str, QListWidget] = {}
         self._key_inputs: dict[str, QLineEdit] = {}
         self._provider_groups: dict[str, QGroupBox] = {}
+        self._dirty = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 14)
@@ -135,6 +140,7 @@ class LLMSettingsPanel(QWidget):
         )
         self._fallback_checkbox.setObjectName("llmFallbackEnabled")
         self._fallback_checkbox.setChecked(self._preferences["fallback_enabled"])
+        self._fallback_checkbox.toggled.connect(self._mark_dirty)
         layout.addWidget(self._fallback_checkbox)
 
         order_group = QGroupBox("Порядок провайдерів")
@@ -179,7 +185,7 @@ class LLMSettingsPanel(QWidget):
         self._save_status.setObjectName("llmSaveStatus")
         footer.addWidget(self._save_status, 1)
         back_button = QPushButton("Назад до чату")
-        back_button.clicked.connect(self.back_requested.emit)
+        back_button.clicked.connect(self._back)
         footer.addWidget(back_button)
         save_button = QPushButton("Зберегти")
         save_button.setObjectName("llmSaveButton")
@@ -204,6 +210,7 @@ class LLMSettingsPanel(QWidget):
 
         model = QLineEdit(provider_spec["model"])
         model.setObjectName(f"llmModel_{provider_id}")
+        model.textChanged.connect(self._mark_dirty)
         self._model_fields[provider_id] = model
         layout.addRow("Модель:", model)
 
@@ -234,7 +241,7 @@ class LLMSettingsPanel(QWidget):
         self._provider_layout.insertWidget(self._provider_layout.count() - 1, group)
 
     def _add_provider(self) -> None:
-        dialog = AddOpenAIProviderDialog(self)
+        dialog = AddProviderDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         if dialog.provider_config is None:
@@ -245,6 +252,7 @@ class LLMSettingsPanel(QWidget):
         self._credentials[provider_id] = []
         self._add_provider_order_item(provider_id)
         self._add_provider_group(provider_id, dialog.provider_config)
+        self._mark_dirty()
 
     def _remove_provider(self) -> None:
         item = self._provider_order.currentItem()
@@ -279,12 +287,14 @@ class LLMSettingsPanel(QWidget):
         group = self._provider_groups.pop(provider_id)
         self._provider_layout.removeWidget(group)
         group.deleteLater()
+        self._mark_dirty()
 
     def _refresh_key_list(self, provider_id: str) -> None:
         key_list = self._key_lists[provider_id]
         key_list.clear()
-        for index, _key in enumerate(self._credentials.get(provider_id, []), start=1):
-            key_list.addItem(f"Ключ {index}")
+        for index, key in enumerate(self._credentials.get(provider_id, []), start=1):
+            masked = f"Ключ {index}: ..." + key[-4:] if len(key) >= 4 else f"Ключ {index}: ****"
+            key_list.addItem(masked)
 
     def _add_key(self, provider_id: str) -> None:
         key_input = self._key_inputs[provider_id]
@@ -299,18 +309,22 @@ class LLMSettingsPanel(QWidget):
             )
             return
         provider_keys = self._credentials.setdefault(provider_id, [])
-        if key not in provider_keys:
-            provider_keys.append(key)
-            self._refresh_key_list(provider_id)
+        if key in provider_keys:
+            QMessageBox.warning(self, "Дубль ключа", "Цей API-ключ уже додано.")
+            return
+        provider_keys.append(key)
+        self._refresh_key_list(provider_id)
+        self._mark_dirty()
         key_input.clear()
 
     def _remove_key(self, provider_id: str) -> None:
         key_list = self._key_lists[provider_id]
         selected_row = key_list.currentRow()
-        provider_keys = self._credentials[provider_id]
+        provider_keys = self._credentials.get(provider_id, [])
         if 0 <= selected_row < len(provider_keys):
             del provider_keys[selected_row]
             self._refresh_key_list(provider_id)
+            self._mark_dirty()
 
     def _move_provider(self, offset: int) -> None:
         current_row = self._provider_order.currentRow()
@@ -358,3 +372,20 @@ class LLMSettingsPanel(QWidget):
             QMessageBox.critical(self, "Не вдалося зберегти", str(error))
             return
         self._save_status.setText("Налаштування збережено.")
+        self._dirty = False
+        self.saved.emit()
+
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+        self._save_status.clear()
+
+    def _back(self) -> None:
+        if self._dirty:
+            result = QMessageBox.question(
+                self,
+                "Незбережені зміни",
+                "Є незбережені зміни. Повернутися до чату?",
+            )
+            if result != QMessageBox.StandardButton.Yes:
+                return
+        self.back_requested.emit()

@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox
 
 from gui.main_window import MainWindow
-from gui.widgets.llm_settings_dialog import (
+from gui.widgets.settings.llm_settings_dialog import (
     AddOpenAIProviderDialog,
     LLMSettingsPanel,
 )

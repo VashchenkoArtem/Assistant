@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .icons import make_pixmap
+from ..common.icons import make_pixmap
 
 
 STYLE = """
@@ -44,18 +44,19 @@ class SearchBar(QWidget):
         layout.setSpacing(10)
 
         search_icon = QLabel()
-        search_icon.setPixmap(make_pixmap("search.svg", 16))
+        search_icon.setPixmap(make_pixmap("controls/search.svg", 16))
         layout.addWidget(search_icon)
 
         self.field = QLineEdit()
         self.field.setObjectName("searchField")
-        self.field.setPlaceholderText("Search files, repositories, or start speaking")
+        self.field.setPlaceholderText("Введіть команду асистенту")
         self.field.setFixedHeight(42)
         self.field.returnPressed.connect(self._submit)
         layout.addWidget(self.field, 1)
 
         self.microphone_button = QPushButton("Ctrl + M")
         self.microphone_button.setObjectName("searchButton")
+        self.microphone_button.setToolTip("Увімкнути або вимкнути мікрофон")
         self.microphone_button.clicked.connect(self.microphone_requested.emit)
         layout.addWidget(self.microphone_button)
 
@@ -65,7 +66,3 @@ class SearchBar(QWidget):
             self.submitted.emit(text)
             self.field.clear()
 
-    def setEnabled(self, enabled: bool) -> None:
-        super().setEnabled(enabled)
-        self.field.setEnabled(enabled)
-        self.microphone_button.setEnabled(enabled)

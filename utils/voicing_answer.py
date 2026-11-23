@@ -5,11 +5,28 @@ import tempfile
 import threading
 import time
 import re
+from types import SimpleNamespace
 
-import edge_tts
-import pygame
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
+try:
+    import edge_tts
+except ImportError:
+    edge_tts = None
+try:
+    import pygame
+except ImportError:
+    pygame = SimpleNamespace(
+        get_init=lambda: False,
+        mixer=SimpleNamespace(
+            get_init=lambda: False,
+            init=lambda: None,
+            stop=lambda: None,
+        ),
+    )
 
 VOICE = "uk-UA-PolinaNeural"
+PHRASE_TIME_LIMIT = 5.0
 
 voice_profile = {
     "voice": VOICE,
@@ -100,6 +117,8 @@ def _voice_worker():
 
 
 async def create_voice(text: str, file_name: str):
+    if edge_tts is None:
+        raise RuntimeError("Модуль edge_tts не встановлено.")
     ready_voice = edge_tts.Communicate(
         text=text,
         voice=voice_profile["voice"],
@@ -132,6 +151,8 @@ def voicing_text(text: str, generation: int | None = None):
                 or _is_current_voice_generation(generation)
             )
         ):
+            if pygame is None:
+                return
             with MIXER_LOCK:
                 if not pygame.get_init() or not pygame.mixer.get_init():
                     pygame.mixer.init()
@@ -203,6 +224,29 @@ def run_voice(text: str, wait: bool = False):
     except Exception:
         _mark_voice_request_finished()
         raise
+
+
+def configure_recognizer(recognizer: object, source: object) -> None:
+    recognizer.dynamic_energy_threshold = True
+    recognizer.adjust_for_ambient_noise(source, duration=1)
+    recognizer.phrase_threshold = 0.05
+    recognizer.pause_threshold = 0.6
+    recognizer.non_speaking_duration = 0.25
+
+
+def listen_for_audio(
+    recognizer: object,
+    source: object,
+    phrase_time_limit: float = PHRASE_TIME_LIMIT,
+):
+    try:
+        return recognizer.listen(
+            source=source,
+            timeout=1,
+            phrase_time_limit=phrase_time_limit,
+        )
+    except Exception:
+        return None
 
 
 def interrupt_voice() -> None:

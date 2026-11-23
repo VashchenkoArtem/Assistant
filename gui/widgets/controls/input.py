@@ -13,7 +13,7 @@ class AutoResizeTextEdit(QTextEdit):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("promptInput")
-        self.setPlaceholderText("Type a message or press the microphone to speak")
+        self.setPlaceholderText("Введіть повідомлення або натисніть мікрофон")
         self.setAcceptRichText(False)
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)

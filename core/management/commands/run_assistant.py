@@ -17,9 +17,12 @@ from utils.match_app import (
 import platform, os, subprocess
 from utils.match_app import increment_open_count, register_found_app, is_unknown
 from utils.voicing_answer import (
+    PHRASE_TIME_LIMIT,
     VOICE_ACTIVE,
+    configure_recognizer,
     interrupt_voice,
     is_current_voice_transcript,
+    listen_for_audio,
     run_voice,
     voicing_and_printing_answer,
 )
@@ -204,22 +207,11 @@ class Command(BaseCommand):
 
     @staticmethod
     def configure_recognizer(recognizer: Any, source: Any) -> None:
-        recognizer.dynamic_energy_threshold = True
-        recognizer.adjust_for_ambient_noise(source, duration=1)
-        recognizer.phrase_threshold = 0.05
-        recognizer.pause_threshold = 0.6
-        recognizer.non_speaking_duration = 0.25
+        configure_recognizer(recognizer, source)
 
     @staticmethod
     def listen_for_audio(recognizer: Any, source: Any):
-        try:
-            return recognizer.listen(
-                source=source,
-                timeout=1,
-                phrase_time_limit=5,
-            )
-        except speech_recognition.WaitTimeoutError:
-            return None
+        return listen_for_audio(recognizer, source, PHRASE_TIME_LIMIT)
 
     def doing_task(self, text):
         self._raise_if_cancelled()

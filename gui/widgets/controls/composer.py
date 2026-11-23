@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .icons import make_icon
+from ..common.icons import make_icon
 from .input import AutoResizeTextEdit
 
 
@@ -53,23 +53,25 @@ class Composer(QWidget):
         composer_layout.setContentsMargins(12, 4, 12, 4)
         composer_layout.setSpacing(8)
 
-        self.keyboard = QPushButton()
-        self.keyboard.setIcon(make_icon("system_enter.svg", 20))
-        self.keyboard.setIconSize(QSize(20, 20))
-        self.keyboard.setObjectName("keyboardButton")
-        self.keyboard.setFixedSize(32, 32)
-        self.keyboard.clicked.connect(self._submit)
-        composer_layout.addWidget(self.keyboard, 0, Qt.AlignmentFlag.AlignBottom)
+        self.send_button = QPushButton()
+        self.send_button.setIcon(make_icon("controls/system_enter.svg", 20))
+        self.send_button.setIconSize(QSize(20, 20))
+        self.send_button.setObjectName("keyboardButton")
+        self.send_button.setFixedSize(32, 32)
+        self.send_button.setToolTip("Надіслати повідомлення")
+        self.send_button.clicked.connect(self._submit)
+        composer_layout.addWidget(self.send_button, 0, Qt.AlignmentFlag.AlignBottom)
 
         self.prompt = AutoResizeTextEdit()
         self.prompt.submitted.connect(self._submit)
         composer_layout.addWidget(self.prompt, 1, Qt.AlignmentFlag.AlignVCenter)
 
         self.microphone = QPushButton()
-        self.microphone.setIcon(make_icon("micro_off.svg", 20))
+        self.microphone.setIcon(make_icon("controls/micro_off.svg", 20))
         self.microphone.setIconSize(QSize(20, 20))
         self.microphone.setObjectName("micButton")
         self.microphone.setFixedSize(32, 32)
+        self.microphone.setToolTip("Увімкнути або вимкнути мікрофон")
         self.microphone.clicked.connect(self.microphone_requested.emit)
         composer_layout.addWidget(self.microphone, 0, Qt.AlignmentFlag.AlignBottom)
 
@@ -91,8 +93,8 @@ class Composer(QWidget):
     def set_prompt_enabled(self, enabled: bool) -> None:
         self.prompt.setEnabled(enabled)
         self.microphone.setEnabled(enabled)
-        self.keyboard.setEnabled(enabled)
+        self.send_button.setEnabled(enabled)
 
     def set_microphone_active(self, active: bool) -> None:
-        icon_name = "micro.svg" if active else "micro_off.svg"
+        icon_name = "controls/micro.svg" if active else "controls/micro_off.svg"
         self.microphone.setIcon(make_icon(icon_name, 20))

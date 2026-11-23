@@ -2,6 +2,7 @@ import base64
 import binascii
 import re
 import xml.etree.ElementTree as ET
+from functools import lru_cache
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -13,12 +14,17 @@ _EMBEDDED_PNG = re.compile(r"data:image/png;base64,([^\"']+)")
 
 def icon_path(name: str) -> Path:
     assets = Path(__file__).parent / "assets"
-    png_path = assets / "png" / f"{Path(name).stem}.png"
+    relative_name = Path(name)
+    png_path = assets / "png" / relative_name.with_suffix(".png")
+    if png_path.is_file():
+        return png_path
+    png_path = assets / "png" / f"{relative_name.stem}.png"
     if png_path.is_file():
         return png_path
     return assets / "icons" / name
 
 
+@lru_cache(maxsize=256)
 def load_pixmap(path: str | Path, size: int) -> QPixmap:
     path = Path(path)
     if not path.is_file():
@@ -46,9 +52,10 @@ def _render_svg(path: Path, size: int) -> QPixmap:
         raise ValueError(f"Invalid SVG icon asset: {path}")
 
     canvas_size = max(size * 4, 64)
-    image = QImage(canvas_size, canvas_size, QImage.Format.Format_ARGB32)
+    image = QImage(canvas_size, canvas_size, QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(Qt.GlobalColor.transparent)
     painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
     renderer.render(painter)
     painter.end()
 
@@ -79,10 +86,16 @@ def _trim_transparency(pixmap: QPixmap) -> QPixmap:
         return QPixmap()
 
     image = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
-    left, top, right, bottom = image.width(), image.height(), -1, -1
-    for y in range(image.height()):
-        for x in range(image.width()):
-            if image.pixelColor(x, y).alpha() >= 24:
+    data = image.constBits()
+    data.setsize(image.sizeInBytes())
+    pixels = memoryview(data)
+    width, height = image.width(), image.height()
+    left, top, right, bottom = width, height, -1, -1
+    bytes_per_row = image.bytesPerLine()
+    for y in range(height):
+        row = y * bytes_per_row
+        for x in range(width):
+            if pixels[row + x * 4 + 3] >= 24:
                 left = min(left, x)
                 top = min(top, y)
                 right = max(right, x)
