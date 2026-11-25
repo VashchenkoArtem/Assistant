@@ -236,7 +236,6 @@ class Command(BaseCommand):
             voicing_and_printing_answer("Привіт, рада тебе бачити!")
             return
 
-        # Убрал озвучивание
         if "додатки" in lowered:
             self.stdout.write("Отримую список додатків...")
             apps = get_list_installed_apps()
@@ -281,6 +280,8 @@ class Command(BaseCommand):
                 is_open = not match.group("verb").lower().startswith("закри")
                 self.handle_open_close(text=text, is_open=is_open)
             return
+
+        self.stdout.write(f"Не вдалося розпізнати команду: {text}")
 
     def handle_paused_command(self, text: str) -> None:
         lowered = text.strip().lower()

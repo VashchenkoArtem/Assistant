@@ -8,7 +8,6 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 class ChatCard(QFrame):
     """A message card used as a visual placeholder in the prototype."""
 
-    # Завантаження і впорядкування SVG/PNG-іконок усередині картки.
     @staticmethod
     def load_pixmap(path: str, size: int) -> QPixmap:
         if path.lower().endswith(".svg"):
@@ -60,7 +59,6 @@ class ChatCard(QFrame):
         layout.setContentsMargins(14, 12, 14, 10)
         layout.setSpacing(12)
 
-        # Ліва частина картки: аватар асистента або користувача.
         icon_label = QLabel()
         icon_label.setObjectName("cardIcon")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -71,7 +69,6 @@ class ChatCard(QFrame):
             icon_label.setText(icon)
         layout.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignTop)
 
-        # Права частина картки: заголовок, текст і час.
         text_layout = QVBoxLayout()
         text_layout.setSpacing(4)
 
@@ -82,7 +79,6 @@ class ChatCard(QFrame):
         header_layout.addWidget(author_label)
         header_layout.addStretch()
 
-        # Необов'язковий рядок статусу праворуч у заголовку картки.
         if status:
             if status_icon:
                 status_icon_label = QLabel()
