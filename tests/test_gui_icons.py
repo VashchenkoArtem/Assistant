@@ -5,10 +5,11 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QToolButton
 
 from gui.icon_loader import icon_path, load_pixmap
-from gui.widgets.icons import icon_path as widget_icon_path
+from gui.widgets.common.icons import icon_path as widget_icon_path
+from gui.widgets.navigation.title_bar import TitleBar
 
 
 def test_window_control_icons_render_without_deleted_png_assets():
@@ -65,3 +66,21 @@ def test_missing_icon_path_is_reported():
 
     with pytest.raises(FileNotFoundError):
         load_pixmap(missing_path, 20)
+
+
+def test_title_bar_contains_window_control_buttons():
+    app = QApplication.instance() or QApplication([])
+    calls = []
+    bar = TitleBar(
+        minimize_callback=lambda: calls.append("minimize"),
+        maximize_callback=lambda: calls.append("maximize"),
+        close_callback=lambda: calls.append("close"),
+    )
+
+    buttons = bar.findChildren(QToolButton)
+    assert len(buttons) == 3
+
+    for button in buttons:
+        button.click()
+
+    assert calls == ["minimize", "maximize", "close"]

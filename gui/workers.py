@@ -1,14 +1,26 @@
-import json
+import contextlib
+import io
+import os
+import sys
 import threading
+from pathlib import Path
 from typing import Any, cast
-from urllib import request as url_request
 
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal
+
+from utils.audio_settings import get_microphone_device_index
+from utils.voicing_answer import (
+    GUI_TEXT_MODE,
+    PHRASE_TIME_LIMIT,
+    configure_recognizer,
+    listen_for_audio,
+)
 
 
 class CommandSignals(QObject):
     finished = pyqtSignal(str, object)
     error = pyqtSignal(str)
+    model_loading = pyqtSignal(bool)
 
 
 class VoiceSignals(QObject):
@@ -16,70 +28,104 @@ class VoiceSignals(QObject):
     error = pyqtSignal(str)
 
 
-class BackendSignals(QObject):
+class InitializationSignals(QObject):
     finished = pyqtSignal(object, object)
 
 
-class BackendHealthWorker(QRunnable):
-    def __init__(self, backend_url: str) -> None:
+class InitializationWorker(QRunnable):
+    def __init__(self, project_root: Path) -> None:
         super().__init__()
-        self.backend_url = backend_url
-        self.signals = BackendSignals()
+        self.project_root = project_root
+        self.signals = InitializationSignals()
+        self.result_command: object | None = None
+        self.result_error: object | None = None
 
     def run(self) -> None:
+        sys_path = str(self.project_root)
+        if sys_path not in sys.path:
+            sys.path.insert(0, sys_path)
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "Assistant.settings")
         try:
-            with url_request.urlopen(
-                f"{self.backend_url}/api/assistant/health/",
-                timeout=8,
-            ) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            if payload.get("ok"):
-                self.signals.finished.emit(True, None)
+            import django
+
+            django.setup()
+            from core.management.commands.run_assistant import Command
+
+            command = Command()
+            if hasattr(command, "initialize_for_text"):
+                command.initialize_for_text()
+                self.result_command = command
+                self.signals.finished.emit(command, None)
                 return
-            message = payload.get("message") or "Бекенд асистента недоступний."
-            self.signals.finished.emit(False, message)
-        except Exception:
-            self.signals.finished.emit(
-                False,
-                "Бекенд асистента недоступний. Запустіть Django у окремому терміналі.",
-            )
+            message = "Метод initialize_for_text() не знайдено."
+            self.result_error = message
+            self.signals.finished.emit(None, message)
+        except Exception as error:
+            self.result_error = str(error)
+            self.signals.finished.emit(None, str(error))
 
 
 class CommandWorker(QRunnable):
-    def __init__(self, backend_url: str, text: str, speak_answer: bool = False) -> None:
+    def __init__(
+        self,
+        command: Any,
+        text: str,
+        speak_answer: bool = False,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
         super().__init__()
-        self.backend_url = backend_url
+        self.command = command
         self.text = text
         self.speak_answer = speak_answer
+        self.cancel_event = cancel_event if cancel_event is not None else threading.Event()
         self.signals = CommandSignals()
 
     def run(self) -> None:
+        if self.cancel_event.is_set():
+            self.signals.finished.emit(self.text, "Команду скасовано.")
+            return
+
+        buffer = io.StringIO()
+        semantic_analyzer = getattr(
+            getattr(getattr(self.command, "response_analyzer", None), "decision_engine", None),
+            "semantic_analyzer",
+            None,
+        )
+        set_loading_callback = getattr(semantic_analyzer, "set_model_loading_callback", None)
+        previous_loading_callback = (
+            set_loading_callback(self.signals.model_loading.emit)
+            if callable(set_loading_callback)
+            else None
+        )
         try:
-            payload = json.dumps(
-                {"text": self.text, "speak_answer": self.speak_answer},
-                ensure_ascii=False,
-            ).encode("utf-8")
-            request = url_request.Request(
-                f"{self.backend_url}/api/assistant/command/",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with url_request.urlopen(request, timeout=30) as response:
-                result = json.loads(response.read().decode("utf-8"))
-            if not result.get("ok"):
-                self.signals.error.emit(
-                    result.get("message", "Команду не вдалося виконати.")
-                )
-                return
-            self.signals.finished.emit(self.text, str(result.get("output", "")).strip())
-        except Exception:
-            self.signals.error.emit("Команду не вдалося виконати. Спробуйте ще раз.")
+            from django.core.management.base import OutputWrapper
+
+            self.command.stdout = OutputWrapper(buffer)
+            self.command.cancel_event = self.cancel_event
+            if not self.speak_answer:
+                GUI_TEXT_MODE.set()
+            else:
+                GUI_TEXT_MODE.clear()
+            with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+                try:
+                    if self.cancel_event.is_set():
+                        raise InterruptedError
+                    self.command.process_recognized_command(self.text)
+                except InterruptedError:
+                    print("Команду скасовано.")
+            self.signals.finished.emit(self.text, buffer.getvalue().strip())
+        except Exception as error:
+            self.signals.error.emit(str(error))
+        finally:
+            if callable(set_loading_callback):
+                set_loading_callback(previous_loading_callback)
+            GUI_TEXT_MODE.clear()
 
 
 class VoiceWorker(QRunnable):
-    def __init__(self) -> None:
+    def __init__(self, phrase_time_limit: float = PHRASE_TIME_LIMIT) -> None:
         super().__init__()
+        self.phrase_time_limit = phrase_time_limit
         self.signals = VoiceSignals()
         self.stop_event = threading.Event()
 
@@ -91,15 +137,23 @@ class VoiceWorker(QRunnable):
             import speech_recognition
 
             recognizer = cast(Any, speech_recognition.Recognizer())
-            microphone = cast(Any, speech_recognition.Microphone())
+            microphone = cast(
+                Any,
+                speech_recognition.Microphone(
+                    device_index=get_microphone_device_index()
+                ),
+            )
             with microphone as source:
-                recognizer.dynamic_energy_threshold = True
-                recognizer.adjust_for_ambient_noise(source, duration=1)
-                recognizer.pause_threshold = 0.6
-
+                configure_recognizer(recognizer, source)
                 while not self.stop_event.is_set():
                     try:
-                        audio = recognizer.listen(source, timeout=1, phrase_time_limit=5)
+                        audio = listen_for_audio(
+                            recognizer,
+                            source,
+                            self.phrase_time_limit,
+                        )
+                        if audio is None:
+                            continue
                         if self.stop_event.is_set():
                             break
                         text = recognizer.recognize_google(audio, language="uk-UA")

@@ -17,9 +17,12 @@ from utils.match_app import (
 import platform, os, subprocess
 from utils.match_app import increment_open_count, register_found_app, is_unknown
 from utils.voicing_answer import (
+    PHRASE_TIME_LIMIT,
     VOICE_ACTIVE,
+    configure_recognizer,
     interrupt_voice,
     is_current_voice_transcript,
+    listen_for_audio,
     run_voice,
     voicing_and_printing_answer,
 )
@@ -47,6 +50,7 @@ from utils.file_explorer import (
 )
 from utils.text_similarity import similarity
 from utils.transliterate import transliterate
+from utils.llm_client import ask_llm
 from core.response_analysis import (
     DialogContext,
     DialogState,
@@ -61,6 +65,10 @@ from core.response_analysis import (
 logger = logging.getLogger(__name__)
 
 CANCEL_ACTION_WORDS = ("скасуй", "скасувати", "скасовую", "відміна", "відміни", "відмінити")
+LLM_TRIGGER_PATTERN = re.compile(
+    r"^\s*(?:/ai|ші|спитай|запитання)\b\s*",
+    re.IGNORECASE,
+)
 APP_COMMAND_PATTERN = re.compile(
     r"\b(?P<verb>відкрий|відкрити|відкривай|відкривати|"
     r"закрий|закрити|закривай|закривати)\b",
@@ -199,22 +207,11 @@ class Command(BaseCommand):
 
     @staticmethod
     def configure_recognizer(recognizer: Any, source: Any) -> None:
-        recognizer.dynamic_energy_threshold = True
-        recognizer.adjust_for_ambient_noise(source, duration=1)
-        recognizer.phrase_threshold = 0.05
-        recognizer.pause_threshold = 0.6
-        recognizer.non_speaking_duration = 0.25
+        configure_recognizer(recognizer, source)
 
     @staticmethod
     def listen_for_audio(recognizer: Any, source: Any):
-        try:
-            return recognizer.listen(
-                source=source,
-                timeout=1,
-                phrase_time_limit=5,
-            )
-        except speech_recognition.WaitTimeoutError:
-            return None
+        return listen_for_audio(recognizer, source, PHRASE_TIME_LIMIT)
 
     def doing_task(self, text):
         self._raise_if_cancelled()
@@ -300,6 +297,14 @@ class Command(BaseCommand):
             if pending_file.get("awaiting_explorer_folder_name"):
                 self.handle_explorer_folder_name(text)
                 return
+        trigger_match = LLM_TRIGGER_PATTERN.match(text)
+        if trigger_match is not None:
+            prompt = text[trigger_match.end():].lstrip(" \t.,!?;:-").strip()
+            if len(prompt) < 3:
+                self.stdout.write("Введіть запит після команди або ключового слова")
+            else:
+                self.stdout.write(ask_llm(prompt))
+            return
         if any(keyword in lowered for keyword in ["пауза"]):
             self.pause_assistant()
             return

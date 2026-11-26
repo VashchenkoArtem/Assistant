@@ -5,11 +5,31 @@ import tempfile
 import threading
 import time
 import re
+from types import SimpleNamespace
+from typing import Any
 
-import edge_tts
-import pygame
+from utils.audio_settings import MIXER_LOCK, get_output_device_name, get_output_volume
+
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
+try:
+    import edge_tts
+except ImportError:
+    edge_tts = None
+try:
+    import pygame
+except ImportError:
+    pygame = SimpleNamespace(
+        get_init=lambda: False,
+        mixer=SimpleNamespace(
+            get_init=lambda: False,
+            init=lambda: None,
+            stop=lambda: None,
+        ),
+    )
 
 VOICE = "uk-UA-PolinaNeural"
+PHRASE_TIME_LIMIT = 5.0
 
 voice_profile = {
     "voice": VOICE,
@@ -19,7 +39,6 @@ voice_profile = {
 }
 
 VOICE_QUEUE: queue.Queue[tuple[str, int] | None] = queue.Queue()
-MIXER_LOCK = threading.Lock()
 AUDIO_LOCK = threading.Lock()
 VOICE_ACTIVE = threading.Event()
 VOICE_STATE_LOCK = threading.Lock()
@@ -27,6 +46,7 @@ GUI_TEXT_MODE = threading.Event()
 _active_voice_requests = 0
 _voice_generation = 0
 _current_voice_text = ""
+_mixer_device_name: str | None = None
 
 
 def _set_current_voice_text(text: str) -> None:
@@ -100,6 +120,8 @@ def _voice_worker():
 
 
 async def create_voice(text: str, file_name: str):
+    if edge_tts is None:
+        raise RuntimeError("Модуль edge_tts не встановлено.")
     ready_voice = edge_tts.Communicate(
         text=text,
         voice=voice_profile["voice"],
@@ -109,6 +131,23 @@ async def create_voice(text: str, file_name: str):
     )
 
     await ready_voice.save(audio_fname=file_name)
+
+
+def _create_audio_sound(file_name: str) -> Any:
+    global _mixer_device_name
+    output_device_name = get_output_device_name()
+    if pygame.mixer.get_init() and _mixer_device_name != output_device_name:
+        pygame.mixer.quit()
+    if not pygame.mixer.get_init():
+        if output_device_name:
+            pygame.mixer.init(devicename=output_device_name)
+        else:
+            pygame.mixer.init()
+        _mixer_device_name = output_device_name
+
+    sound = pygame.mixer.Sound(file_name)
+    sound.set_volume(get_output_volume())
+    return sound
 
 
 def voicing_text(text: str, generation: int | None = None):
@@ -132,11 +171,10 @@ def voicing_text(text: str, generation: int | None = None):
                 or _is_current_voice_generation(generation)
             )
         ):
+            if pygame is None:
+                return
             with MIXER_LOCK:
-                if not pygame.get_init() or not pygame.mixer.get_init():
-                    pygame.mixer.init()
-
-                sound = pygame.mixer.Sound(file_name)
+                sound = _create_audio_sound(file_name)
                 with VOICE_STATE_LOCK:
                     if generation is not None and generation != _voice_generation:
                         return
@@ -203,6 +241,29 @@ def run_voice(text: str, wait: bool = False):
     except Exception:
         _mark_voice_request_finished()
         raise
+
+
+def configure_recognizer(recognizer: object, source: object) -> None:
+    recognizer.dynamic_energy_threshold = True
+    recognizer.adjust_for_ambient_noise(source, duration=1)
+    recognizer.phrase_threshold = 0.05
+    recognizer.pause_threshold = 0.6
+    recognizer.non_speaking_duration = 0.25
+
+
+def listen_for_audio(
+    recognizer: object,
+    source: object,
+    phrase_time_limit: float = PHRASE_TIME_LIMIT,
+):
+    try:
+        return recognizer.listen(
+            source=source,
+            timeout=1,
+            phrase_time_limit=phrase_time_limit,
+        )
+    except Exception:
+        return None
 
 
 def interrupt_voice() -> None:

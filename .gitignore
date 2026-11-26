@@ -6,4 +6,8 @@ __pycache__/
 db.sqlite3
 .DS_Store 
 .env
+.llm_credentials.json
+.llm_preferences.json
+.llm_credentials.json.*.tmp
+.llm_preferences.json.*.tmp
 *.mp3

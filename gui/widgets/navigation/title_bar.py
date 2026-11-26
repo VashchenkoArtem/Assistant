@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .icons import make_icon, make_pixmap
+from ..common.icons import make_icon, make_pixmap
 
 
 STYLE = """
@@ -78,3 +78,19 @@ class TitleBar(QFrame):
             actions_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(actions, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def mousePressEvent(self, event) -> None:
+        if event is not None and event.button() == Qt.MouseButton.LeftButton:
+            window = self.window()
+            if hasattr(window, "windowHandle"):
+                window.windowHandle().startSystemMove()
+            event.accept()
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event is not None and event.button() == Qt.MouseButton.LeftButton:
+            window = self.window()
+            if window.isMaximized():
+                window.showNormal()
+            else:
+                window.showMaximized()
+            event.accept()

@@ -4,7 +4,7 @@ from PyQt6.QtCore import QRectF, Qt, QTimer
 from PyQt6.QtGui import QColor, QPainter, QPixmap
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from ..icon_loader import load_pixmap
+from ...icon_loader import load_pixmap
 
 
 class LoadingDot(QWidget):
@@ -39,7 +39,7 @@ class LoadingDot(QWidget):
 
 # ============================ КАРТКА ПОВІДОМЛЕННЯ ЧАТУ ============================
 class ChatCard(QFrame):
-    """A message card used as a visual placeholder in the prototype."""
+    """A message card for assistant and user messages."""
 
     def __init__(
         self,
@@ -104,6 +104,10 @@ class ChatCard(QFrame):
             body_label = QLabel(body)
             body_label.setObjectName("messageBody")
             body_label.setWordWrap(True)
+            body_label.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            body_label.setTextFormat(Qt.TextFormat.PlainText)
             text_layout.addWidget(body_label)
 
         if not loading:

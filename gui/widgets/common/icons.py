@@ -1,6 +1,6 @@
 from PyQt6.QtGui import QIcon, QPixmap
 
-from ..icon_loader import icon_path, load_pixmap
+from ...icon_loader import icon_path, load_pixmap
 
 
 def make_pixmap(name: str, size: int) -> QPixmap:

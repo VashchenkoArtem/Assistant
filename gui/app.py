@@ -3,6 +3,7 @@ import sys
 from PyQt6.QtWidgets import QApplication
 
 from .main_window import MainWindow
+from .styles import STYLESHEET
 
 
 class AssistantApp:
@@ -10,6 +11,7 @@ class AssistantApp:
 
     def __init__(self, argv: list[str] | None = None) -> None:
         self.qt_app = QApplication.instance() or QApplication(argv or sys.argv)
+        self.qt_app.setStyleSheet(STYLESHEET)
         self.window = MainWindow()
 
     def run(self) -> int:

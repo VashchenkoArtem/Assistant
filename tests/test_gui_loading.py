@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication, QLabel
 
 from gui.main_window import CommandWorker, MainWindow
-from gui.widgets.chat_widgets import ChatCard, LoadingDot
+from gui.widgets.chat.chat_widgets import ChatCard, LoadingDot
 
 
 @pytest.fixture(scope="module")

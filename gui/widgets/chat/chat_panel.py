@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QScrollArea,
     QVBoxLayout,
@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .chat_widgets import ChatCard
-from .icons import icon_path
+from ..common.icons import icon_path
 
 
 STYLE = """
@@ -55,10 +55,10 @@ class ChatPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.scroll = QScrollArea()
-        self.scroll.setObjectName("chatScroll")
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("chatScroll")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         viewport = QWidget()
         viewport.setObjectName("chatViewport")
@@ -67,8 +67,8 @@ class ChatPanel(QWidget):
         self.chat_layout.setSpacing(8)
         self.chat_layout.addStretch()
 
-        self.scroll.setWidget(viewport)
-        layout.addWidget(self.scroll, 1)
+        self.scroll_area.setWidget(viewport)
+        layout.addWidget(self.scroll_area, 1)
 
     def add_card(
         self,
@@ -76,6 +76,7 @@ class ChatPanel(QWidget):
         body: str,
         is_user: bool = False,
         status: str | None = None,
+        loading: bool = False,
     ) -> ChatCard:
         icon_name = "chat/user_ico.svg" if is_user else "chat/bot_ico.svg"
         if author == "System":
@@ -88,17 +89,24 @@ class ChatPanel(QWidget):
             is_user=is_user,
             status=status,
             status_icon=str(icon_path("status/status.svg")) if status else None,
+            loading=loading,
         )
         insert_at = max(0, self.chat_layout.count() - 1)
         self.chat_layout.insertWidget(insert_at, card)
-        self.scroll_to_bottom()
+        self.scroll_to_bottom(force=is_user)
         return card
 
-    def scroll_to_bottom(self) -> None:
+    def scroll_to_bottom(self, force: bool = False) -> None:
         self.chat_layout.activate()
-        scrollbar = self.scroll.verticalScrollBar()
+        scrollbar = self.scroll_area.verticalScrollBar()
         if scrollbar is not None:
-            scrollbar.setValue(scrollbar.maximum())
-            QTimer.singleShot(0, lambda: scrollbar.setValue(scrollbar.maximum()))
-            QTimer.singleShot(50, lambda: scrollbar.setValue(scrollbar.maximum()))
-            QTimer.singleShot(150, lambda: scrollbar.setValue(scrollbar.maximum()))
+            at_bottom = scrollbar.value() >= scrollbar.maximum() - 2
+            if force or at_bottom:
+                scrollbar.setValue(scrollbar.maximum())
+
+    def remove_card(self, card: ChatCard | None) -> None:
+        if card is None:
+            return
+        self.chat_layout.removeWidget(card)
+        card.setParent(None)
+        card.deleteLater()
