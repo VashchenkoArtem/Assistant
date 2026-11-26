@@ -21,6 +21,7 @@ from .styles import STYLESHEET
 from .widgets.chat.chat_panel import ChatPanel
 from .widgets.chat.chat_widgets import ChatCard
 from .widgets.controls.composer import Composer
+from .widgets.settings.audio_settings_dialog import AudioSettingsDialog
 from .widgets.settings.llm_settings_dialog import LLMSettingsPanel
 from .widgets.controls.search_bar import SearchBar
 from .widgets.navigation.sidebar import Sidebar
@@ -59,6 +60,7 @@ class MainWindow(QMainWindow):
         self._content_stack = QStackedWidget()
         self._chat_page = QWidget()
         self._settings_panel: LLMSettingsPanel | None = None
+        self._audio_settings_panel: AudioSettingsDialog | None = None
         self._build_ui()
 
         self.search.submitted.connect(self.send_message)
@@ -110,6 +112,7 @@ class MainWindow(QMainWindow):
         self.sidebar = Sidebar()
         self.sidebar.profile_requested.connect(self.open_personalization)
         self.sidebar.home_requested.connect(self.show_chat)
+        self.sidebar.settings_requested.connect(self.open_audio_settings)
         body.addWidget(self.sidebar)
 
         main_layout = QVBoxLayout(self._chat_page)
@@ -149,6 +152,14 @@ class MainWindow(QMainWindow):
     def show_chat(self) -> None:
         self._content_stack.setCurrentWidget(self._chat_page)
         self.sidebar.set_active_page("home")
+
+    def open_audio_settings(self) -> None:
+        if self._audio_settings_panel is None:
+            self._audio_settings_panel = AudioSettingsDialog(self._content_stack)
+            self._audio_settings_panel.back_requested.connect(self.show_chat)
+            self._content_stack.addWidget(self._audio_settings_panel)
+        self._content_stack.setCurrentWidget(self._audio_settings_panel)
+        self.sidebar.set_active_page("settings")
 
     def _llm_settings_saved(self) -> None:
         self._command = self._command

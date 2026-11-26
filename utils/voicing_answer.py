@@ -6,6 +6,9 @@ import threading
 import time
 import re
 from types import SimpleNamespace
+from typing import Any
+
+from utils.audio_settings import MIXER_LOCK, get_output_device_name, get_output_volume
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
@@ -36,7 +39,6 @@ voice_profile = {
 }
 
 VOICE_QUEUE: queue.Queue[tuple[str, int] | None] = queue.Queue()
-MIXER_LOCK = threading.Lock()
 AUDIO_LOCK = threading.Lock()
 VOICE_ACTIVE = threading.Event()
 VOICE_STATE_LOCK = threading.Lock()
@@ -44,6 +46,7 @@ GUI_TEXT_MODE = threading.Event()
 _active_voice_requests = 0
 _voice_generation = 0
 _current_voice_text = ""
+_mixer_device_name: str | None = None
 
 
 def _set_current_voice_text(text: str) -> None:
@@ -130,6 +133,23 @@ async def create_voice(text: str, file_name: str):
     await ready_voice.save(audio_fname=file_name)
 
 
+def _create_audio_sound(file_name: str) -> Any:
+    global _mixer_device_name
+    output_device_name = get_output_device_name()
+    if pygame.mixer.get_init() and _mixer_device_name != output_device_name:
+        pygame.mixer.quit()
+    if not pygame.mixer.get_init():
+        if output_device_name:
+            pygame.mixer.init(devicename=output_device_name)
+        else:
+            pygame.mixer.init()
+        _mixer_device_name = output_device_name
+
+    sound = pygame.mixer.Sound(file_name)
+    sound.set_volume(get_output_volume())
+    return sound
+
+
 def voicing_text(text: str, generation: int | None = None):
     file_descriptor, file_name = tempfile.mkstemp(suffix=".mp3", prefix="voice_")
     os.close(file_descriptor)
@@ -154,10 +174,7 @@ def voicing_text(text: str, generation: int | None = None):
             if pygame is None:
                 return
             with MIXER_LOCK:
-                if not pygame.get_init() or not pygame.mixer.get_init():
-                    pygame.mixer.init()
-
-                sound = pygame.mixer.Sound(file_name)
+                sound = _create_audio_sound(file_name)
                 with VOICE_STATE_LOCK:
                     if generation is not None and generation != _voice_generation:
                         return

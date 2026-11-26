@@ -43,6 +43,7 @@ QToolButton.sideButton:hover, QToolButton.sideButton:checked {
 class Sidebar(QFrame):
     home_requested = pyqtSignal()
     profile_requested = pyqtSignal()
+    settings_requested = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -79,6 +80,8 @@ class Sidebar(QFrame):
                 button.clicked.connect(self.home_requested.emit)
             elif page == "profile":
                 button.clicked.connect(self.profile_requested.emit)
+            elif page == "settings":
+                button.clicked.connect(self.settings_requested.emit)
             layout.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
             buttons.append(button)
 

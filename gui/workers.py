@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal
 
+from utils.audio_settings import get_microphone_device_index
 from utils.voicing_answer import (
     GUI_TEXT_MODE,
     PHRASE_TIME_LIMIT,
@@ -136,7 +137,12 @@ class VoiceWorker(QRunnable):
             import speech_recognition
 
             recognizer = cast(Any, speech_recognition.Recognizer())
-            microphone = cast(Any, speech_recognition.Microphone())
+            microphone = cast(
+                Any,
+                speech_recognition.Microphone(
+                    device_index=get_microphone_device_index()
+                ),
+            )
             with microphone as source:
                 configure_recognizer(recognizer, source)
                 while not self.stop_event.is_set():
