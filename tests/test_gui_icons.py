@@ -5,10 +5,12 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QToolButton
 
 from gui.icon_loader import icon_path, load_pixmap
 from gui.widgets.common.icons import icon_path as widget_icon_path
+from gui.widgets.navigation.sidebar import Sidebar
 from gui.widgets.navigation.title_bar import TitleBar
 
 
@@ -84,3 +86,38 @@ def test_title_bar_contains_window_control_buttons():
         button.click()
 
     assert calls == ["minimize", "maximize", "close"]
+
+
+def test_sidebar_expands_and_collapses_without_losing_active_page():
+    app = QApplication.instance() or QApplication([])
+    sidebar = Sidebar()
+    sidebar.set_active_page("settings")
+    logo_button = sidebar.findChild(QToolButton, "sidebarLogo")
+    page_buttons = sidebar.findChildren(QToolButton, "sideButton")
+
+    assert logo_button is not None
+    assert len(page_buttons) == 3
+    assert sidebar.width() == 63
+    assert next(
+        button for button in page_buttons if button.toolTip() == "Налаштування"
+    ).isChecked()
+
+    logo_button.click()
+
+    assert sidebar.width() == 220
+    assert all(
+        button.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        for button in page_buttons
+    )
+    assert next(
+        button for button in page_buttons if button.toolTip() == "Налаштування"
+    ).isChecked()
+
+    logo_button.click()
+
+    assert sidebar.width() == 63
+    assert all(
+        button.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonIconOnly
+        for button in page_buttons
+    )
+    assert app is not None

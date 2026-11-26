@@ -9,7 +9,6 @@ from typing import Any, cast
 
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal
 
-from utils.audio_settings import get_microphone_device_index
 from utils.voicing_answer import (
     GUI_TEXT_MODE,
     PHRASE_TIME_LIMIT,
@@ -131,9 +130,14 @@ class CommandWorker(QRunnable):
 
 
 class VoiceWorker(QRunnable):
-    def __init__(self, phrase_time_limit: float = PHRASE_TIME_LIMIT) -> None:
+    def __init__(
+        self,
+        phrase_time_limit: float = PHRASE_TIME_LIMIT,
+        device_index: int | None = None,
+    ) -> None:
         super().__init__()
         self.phrase_time_limit = phrase_time_limit
+        self.device_index = device_index
         self.signals = VoiceSignals()
         self.stop_event = threading.Event()
 
@@ -148,7 +152,7 @@ class VoiceWorker(QRunnable):
             microphone = cast(
                 Any,
                 speech_recognition.Microphone(
-                    device_index=get_microphone_device_index()
+                    device_index=self.device_index
                 ),
             )
             with microphone as source:
@@ -159,6 +163,7 @@ class VoiceWorker(QRunnable):
                             recognizer,
                             source,
                             self.phrase_time_limit,
+                            stop_event=self.stop_event,
                         )
                         if audio is None:
                             continue

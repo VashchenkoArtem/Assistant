@@ -40,12 +40,47 @@ def test_main_window_initializes_assistant_without_command(qt_app, monkeypatch):
     assert window._initializing
     assert window._initialization_status_card is not None
 
+    added_cards = []
+    add_card = window.chat.add_card
+
+    def record_added_card(*args, **kwargs):
+        added_cards.append(args)
+        return add_card(*args, **kwargs)
+
+    monkeypatch.setattr(window.chat, "add_card", record_added_card)
     command = object()
     window._assistant_initialized(command, None)
 
     assert window._command is command
     assert not window._initializing
     assert window._initialization_status_card is None
+    assert added_cards == [
+        ("Поліна", "Привіт! Напишіть команду або натисніть кнопку мікрофона.")
+    ]
+    assert not window._initialization_timeout_timer.isActive()
+    window.close()
+
+
+def test_initialization_timeout_adds_a_status_message(qt_app, monkeypatch):
+    assert qt_app is not None
+    monkeypatch.setattr("gui.main_window.QThreadPool.start", lambda *_args: None)
+    window = MainWindow()
+    added_cards = []
+    add_card = window.chat.add_card
+
+    def record_added_card(*args, **kwargs):
+        added_cards.append(args)
+        return add_card(*args, **kwargs)
+
+    monkeypatch.setattr(window.chat, "add_card", record_added_card)
+    window._initialization_timed_out()
+
+    assert added_cards == [
+        (
+            "Система",
+            "Ініціалізація триває довше очікуваного. Перевірте вивід програми на помилки.",
+        )
+    ]
     window.close()
 
 

@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from utils.audio_settings import resolve_microphone_device_index
 from utils.llm_config import LLMConfigError
 from utils.voicing_answer import interrupt_voice
 
@@ -40,8 +41,8 @@ class MainWindow(QMainWindow):
     def __init__(self, command: Any | None = None) -> None:
         super().__init__()
         self.setWindowTitle("Поліна")
-        self.resize(908, 907)
-        self.setMinimumSize(760, 620)
+        self.resize(908, 720)
+        self.setMinimumSize(760, 560)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setStyleSheet(STYLESHEET)
 
@@ -61,6 +62,11 @@ class MainWindow(QMainWindow):
         self._voice_stopped_card: ChatCard | None = None
         self._initialization_worker: InitializationWorker | None = None
         self._initialization_status_card: ChatCard | None = None
+        self._initialization_timeout_timer = QTimer(self)
+        self._initialization_timeout_timer.setSingleShot(True)
+        self._initialization_timeout_timer.timeout.connect(
+            self._initialization_timed_out
+        )
         self._command = command
         self._initializing = command is None
 
@@ -93,6 +99,7 @@ class MainWindow(QMainWindow):
             self._set_commands_enabled(False)
             self._start_initialization()
         else:
+            self._show_welcome_message()
             self._set_commands_enabled(True)
 
     def icon_path(self, name: str) -> Path:
@@ -178,13 +185,28 @@ class MainWindow(QMainWindow):
     def _start_initialization(self) -> None:
         self._initializing = True
         self._set_commands_enabled(False)
+        self._initialization_timeout_timer.start(15000)
         project_root = Path(__file__).resolve().parents[1]
         self._initialization_worker = InitializationWorker(project_root)
         self._initialization_worker.signals.finished.connect(self._assistant_initialized)
         self._thread_pool.start(self._initialization_worker)
 
+    def _initialization_timed_out(self) -> None:
+        if self._initializing and self._initialization_status_card is not None:
+            self.chat.add_card(
+                "Система",
+                "Ініціалізація триває довше очікуваного. Перевірте вивід програми на помилки.",
+            )
+
+    def _show_welcome_message(self) -> None:
+        self.chat.add_card(
+            "Поліна",
+            "Привіт! Напишіть команду або натисніть кнопку мікрофона.",
+        )
+
     def _assistant_initialized(self, command: object, error: object) -> None:
         self._initializing = False
+        self._initialization_timeout_timer.stop()
         self._remove_initialization_status_card()
         if error is not None or command is None:
             message = str(error or "Не вдалося ініціалізувати асистента.")
@@ -206,6 +228,7 @@ class MainWindow(QMainWindow):
             return
         self._command = command
         self._set_commands_enabled(True)
+        self._show_welcome_message()
 
     def send_message(self, text: str, speak_answer: bool = False) -> None:
         text = text.strip()
@@ -361,6 +384,14 @@ class MainWindow(QMainWindow):
         if self._voice_busy:
             self.stop_microphone_input()
             return
+        try:
+            device_index = resolve_microphone_device_index()
+        except (ImportError, OSError, RuntimeError, ValueError) as error:
+            self.chat.add_card(
+                "Система",
+                f"Не вдалося перевірити доступні мікрофони: {error}",
+            )
+            return
         self._remove_voice_stopped_card()
         self._voice_busy = True
         self.composer.set_microphone_active(True)
@@ -369,7 +400,7 @@ class MainWindow(QMainWindow):
             "Слухаю вас...",
             status="Запис",
         )
-        self._voice_worker = VoiceWorker()
+        self._voice_worker = VoiceWorker(device_index=device_index)
         self._voice_worker.signals.recognized.connect(self._voice_recognized)
         self._voice_worker.signals.error.connect(self._voice_failed)
         self._thread_pool.start(self._voice_worker)

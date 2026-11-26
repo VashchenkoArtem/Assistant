@@ -76,12 +76,91 @@ def test_microphone_device_names_repair_mojibake_without_changing_valid_names(
         "get_pyaudio",
         staticmethod(lambda: pyaudio),
     )
+    monkeypatch.setattr(audio_settings.sys, "platform", "win32")
+    monkeypatch.setattr(
+        audio_settings,
+        "_list_active_windows_microphone_names",
+        lambda: {
+            "переназначение - input",
+            "микрофон (realtek(r) audio)",
+        },
+    )
 
     assert audio_settings.list_microphone_devices() == [
         (0, "Переназначение - Input"),
         (2, "Микрофон (Realtek(R) Audio)"),
     ]
     assert audio.terminated
+
+
+def test_microphone_list_excludes_inactive_windows_endpoints(monkeypatch):
+    from types import SimpleNamespace
+
+    import speech_recognition
+
+    devices = [
+        {"name": "USB Microphone", "maxInputChannels": 1},
+        {"name": "Disabled Microphone", "maxInputChannels": 1},
+        {"name": "USB Microphone", "maxInputChannels": 1},
+    ]
+
+    class Audio:
+        def get_device_count(self):
+            return len(devices)
+
+        def get_device_info_by_index(self, index):
+            return devices[index]
+
+        def terminate(self):
+            pass
+
+    pyaudio = SimpleNamespace(PyAudio=Audio)
+    monkeypatch.setattr(
+        speech_recognition.Microphone,
+        "get_pyaudio",
+        staticmethod(lambda: pyaudio),
+    )
+    monkeypatch.setattr(audio_settings.sys, "platform", "win32")
+    monkeypatch.setattr(
+        audio_settings,
+        "_list_active_windows_microphone_names",
+        lambda: {"usb microphone"},
+    )
+
+    assert audio_settings.list_microphone_devices() == [(0, "USB Microphone")]
+
+
+def test_unavailable_saved_microphone_falls_back_to_system_default(monkeypatch):
+    monkeypatch.setattr(audio_settings, "get_microphone_device_index", lambda: 26)
+    monkeypatch.setattr(
+        audio_settings,
+        "list_microphone_devices",
+        lambda: [(index, f"Microphone {index}") for index in range(26)],
+    )
+
+    assert audio_settings.resolve_microphone_device_index() is None
+
+
+def test_available_saved_microphone_index_is_preserved(monkeypatch):
+    monkeypatch.setattr(audio_settings, "get_microphone_device_index", lambda: 3)
+    monkeypatch.setattr(
+        audio_settings,
+        "list_microphone_devices",
+        lambda: [(3, "USB microphone")],
+    )
+
+    assert audio_settings.resolve_microphone_device_index() == 3
+
+
+def test_system_default_microphone_does_not_enumerate_saved_devices(monkeypatch):
+    monkeypatch.setattr(audio_settings, "get_microphone_device_index", lambda: -1)
+    monkeypatch.setattr(
+        audio_settings,
+        "list_microphone_devices",
+        lambda: pytest.fail("default input should not require device enumeration"),
+    )
+
+    assert audio_settings.resolve_microphone_device_index() is None
 
 
 def test_audio_settings_page_is_internal_and_reuses_instance(monkeypatch):
@@ -142,6 +221,34 @@ def test_audio_settings_dialog_saves_selected_devices_and_volume(monkeypatch):
     app.processEvents()
 
 
+def test_audio_settings_dialog_shows_default_for_unavailable_saved_device(
+    monkeypatch,
+):
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(
+        audio_settings_dialog,
+        "get_microphone_device_index",
+        lambda: 26,
+    )
+    monkeypatch.setattr(
+        audio_settings_dialog,
+        "list_microphone_devices",
+        lambda: [(1, "Built-in microphone")],
+    )
+    monkeypatch.setattr(
+        audio_settings_dialog,
+        "list_output_devices",
+        lambda: ["Speakers"],
+    )
+    dialog = audio_settings_dialog.AudioSettingsDialog()
+
+    assert dialog.microphone.currentData() == -1
+    assert "мікрофон недоступний" in dialog.status.text()
+
+    dialog.close()
+    app.processEvents()
+
+
 def test_voice_worker_uses_selected_microphone(monkeypatch):
     import speech_recognition
 
@@ -159,18 +266,60 @@ def test_voice_worker_uses_selected_microphone(monkeypatch):
         def __exit__(self, *_args):
             return False
 
-    monkeypatch.setattr(
-        "gui.workers.get_microphone_device_index",
-        lambda: 3,
-    )
     monkeypatch.setattr(speech_recognition, "Microphone", Microphone)
-    worker = VoiceWorker()
+    worker = VoiceWorker(device_index=3)
     worker.stop()
 
     with patch("gui.workers.configure_recognizer"):
         worker.run()
 
     assert selected_devices == [3]
+
+
+def test_voice_worker_uses_system_default_microphone(monkeypatch):
+    import speech_recognition
+
+    from gui.workers import VoiceWorker
+
+    selected_devices = []
+
+    class Microphone:
+        def __init__(self, device_index):
+            selected_devices.append(device_index)
+
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(speech_recognition, "Microphone", Microphone)
+    worker = VoiceWorker(device_index=None)
+    worker.stop()
+
+    with patch("gui.workers.configure_recognizer"):
+        worker.run()
+
+    assert selected_devices == [None]
+
+
+def test_main_window_passes_resolved_microphone_to_voice_worker(
+    monkeypatch,
+):
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(
+        "gui.main_window.resolve_microphone_device_index",
+        lambda: 1,
+    )
+    monkeypatch.setattr("gui.main_window.QThreadPool.start", lambda *_args: None)
+    window = MainWindow(command=object())
+
+    window.start_microphone_input()
+
+    assert window._voice_worker is not None
+    assert window._voice_worker.device_index == 1
+    window.close()
+    app.processEvents()
 
 
 def test_voice_output_uses_selected_device_and_volume(monkeypatch):

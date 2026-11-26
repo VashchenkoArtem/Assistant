@@ -1,4 +1,5 @@
 import os
+import threading
 from collections.abc import Iterable
 from unittest.mock import Mock, call, patch
 import pytest
@@ -171,25 +172,113 @@ def test_pending_dialog_takes_priority_over_llm_trigger(text):
     ask_llm.assert_not_called()
 
 
-def test_listener_keeps_recording_while_assistant_is_speaking():
+def test_listener_waits_until_assistant_finishes_speaking(monkeypatch):
     recognizer = Mock()
     recognizer.listen.return_value = "user audio"
     source = object()
+    voice_active = threading.Event()
+    voice_active.set()
 
-    with (
-        patch.object(run_assistant, "VOICE_ACTIVE") as voice_active,
-    ):
-        voice_active.is_set.return_value = True
-        audio = Command.listen_for_audio(recognizer, source=source)
+    class ObservedIdleEvent(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            waiting.set()
+            return super().wait(timeout)
 
-    assert audio == "user audio"
+    waiting = threading.Event()
+    voice_idle = ObservedIdleEvent()
+    monkeypatch.setattr(voicing_answer, "VOICE_ACTIVE", voice_active)
+    monkeypatch.setattr(voicing_answer, "VOICE_IDLE", voice_idle)
+    monkeypatch.setattr(voicing_answer, "_active_voice_requests", 1)
+    monkeypatch.setattr(voicing_answer, "_voice_activity_generation", 1)
+    result = []
+    listener = threading.Thread(
+        target=lambda: result.append(
+            Command.listen_for_audio(recognizer, source=source)
+        )
+    )
+    listener.start()
+
+    try:
+        assert waiting.wait(timeout=1)
+        recognizer.listen.assert_not_called()
+    finally:
+        with voicing_answer.VOICE_STATE_LOCK:
+            voicing_answer._active_voice_requests = 0
+            voicing_answer._voice_activity_generation += 1
+            voice_active.clear()
+            voice_idle.set()
+        listener.join(timeout=1)
+
+    assert not listener.is_alive()
+    assert result == ["user audio"]
     recognizer.listen.assert_called_once()
     assert recognizer.listen.call_args.kwargs == {
         "source": source,
         "timeout": 1,
         "phrase_time_limit": 5,
     }
-    voice_active.is_set.assert_not_called()
+
+
+def test_audio_recorded_during_speech_is_discarded(monkeypatch):
+    recognizer = Mock()
+    source = object()
+
+    def listen_during_voice(**_kwargs):
+        voicing_answer._mark_voice_request_started()
+        voicing_answer._mark_voice_request_finished()
+        return "assistant audio"
+
+    recognizer.listen.side_effect = listen_during_voice
+    monkeypatch.setattr(voicing_answer, "_active_voice_requests", 0)
+    monkeypatch.setattr(voicing_answer, "_voice_activity_generation", 0)
+    monkeypatch.setattr(voicing_answer, "VOICE_ACTIVE", threading.Event())
+    monkeypatch.setattr(voicing_answer, "VOICE_IDLE", threading.Event())
+    voicing_answer.VOICE_IDLE.set()
+
+    audio = Command.listen_for_audio(recognizer, source=source)
+
+    assert audio is None
+    recognizer.listen.assert_called_once()
+
+
+def test_listener_can_stop_while_waiting_for_speech(monkeypatch):
+    recognizer = Mock()
+    voice_active = threading.Event()
+    voice_active.set()
+
+    class ObservedIdleEvent(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            waiting.set()
+            return super().wait(timeout)
+
+    waiting = threading.Event()
+    voice_idle = ObservedIdleEvent()
+    monkeypatch.setattr(voicing_answer, "VOICE_ACTIVE", voice_active)
+    monkeypatch.setattr(voicing_answer, "VOICE_IDLE", voice_idle)
+    monkeypatch.setattr(voicing_answer, "_active_voice_requests", 1)
+    monkeypatch.setattr(voicing_answer, "_voice_activity_generation", 1)
+    stop_event = threading.Event()
+    result = []
+    listener = threading.Thread(
+        target=lambda: result.append(
+            voicing_answer.listen_for_audio(
+                recognizer,
+                source=object(),
+                stop_event=stop_event,
+            )
+        )
+    )
+    listener.start()
+
+    try:
+        assert waiting.wait(timeout=1)
+    finally:
+        stop_event.set()
+        listener.join(timeout=1)
+
+    assert not listener.is_alive()
+    assert result == [None]
+    recognizer.listen.assert_not_called()
 
 
 def test_current_voice_transcript_is_identified_for_echo_filter():

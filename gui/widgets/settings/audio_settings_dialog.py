@@ -98,9 +98,15 @@ class AudioSettingsDialog(QWidget):
         except (ImportError, OSError, RuntimeError) as error:
             errors.append(f"Не вдалося отримати аудіовиходи: {error}")
 
-        microphone_index = self.microphone.findData(get_microphone_device_index())
+        saved_microphone_index = get_microphone_device_index()
+        microphone_index = self.microphone.findData(saved_microphone_index)
         if microphone_index >= 0:
             self.microphone.setCurrentIndex(microphone_index)
+        elif saved_microphone_index >= 0:
+            self.microphone.setCurrentIndex(0)
+            errors.append(
+                "Збережений мікрофон недоступний; вибрано системний за замовчуванням."
+            )
         output_index = self.output_device.findData(get_output_device_name())
         if output_index >= 0:
             self.output_device.setCurrentIndex(output_index)

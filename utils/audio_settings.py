@@ -1,3 +1,4 @@
+import sys
 import threading
 
 from PyQt6.QtCore import QSettings
@@ -17,6 +18,14 @@ def _settings() -> QSettings:
 
 def get_microphone_device_index() -> int:
     return _settings().value(MICROPHONE_DEVICE_KEY, -1, type=int)
+
+
+def resolve_microphone_device_index() -> int | None:
+    selected_index = get_microphone_device_index()
+    if selected_index < 0:
+        return None
+    available_indexes = {index for index, _name in list_microphone_devices()}
+    return selected_index if selected_index in available_indexes else None
 
 
 def get_output_device_name() -> str:
@@ -54,13 +63,53 @@ def _repair_microphone_name(name: str) -> str:
         return name
 
 
+def _normalize_microphone_name(name: str) -> str:
+    return " ".join(_repair_microphone_name(name).casefold().split())
+
+
+def _list_active_windows_microphone_names() -> set[str]:
+    from _ctypes import COMError
+
+    import comtypes
+    from pycaw.constants import DEVICE_STATE, EDataFlow
+    from pycaw.pycaw import AudioUtilities
+
+    initialized = False
+    try:
+        comtypes.CoInitialize()
+        initialized = True
+        devices = AudioUtilities.GetAllDevices(
+            data_flow=EDataFlow.eCapture.value,
+            device_state=DEVICE_STATE.ACTIVE.value,
+        )
+        names = set()
+        for device in devices:
+            name = device.FriendlyName
+            if isinstance(name, str) and name.strip():
+                names.add(_normalize_microphone_name(name))
+    except (COMError, OSError) as error:
+        raise RuntimeError(
+            f"Не вдалося отримати активні мікрофони Windows: {error}"
+        ) from error
+    finally:
+        if initialized:
+            comtypes.CoUninitialize()
+    return names
+
+
 def list_microphone_devices() -> list[tuple[int, str]]:
     import speech_recognition
 
+    active_names = (
+        _list_active_windows_microphone_names()
+        if sys.platform == "win32"
+        else None
+    )
     pyaudio = speech_recognition.Microphone.get_pyaudio()
     audio = pyaudio.PyAudio()
     try:
         devices = []
+        seen_names = set()
         for index in range(audio.get_device_count()):
             device_info = audio.get_device_info_by_index(index)
             name = device_info["name"]
@@ -73,7 +122,16 @@ def list_microphone_devices() -> list[tuple[int, str]]:
                 )
             if max_input_channels <= 0:
                 continue
-            devices.append((index, _repair_microphone_name(name)))
+            repaired_name = _repair_microphone_name(name)
+            normalized_name = _normalize_microphone_name(repaired_name)
+            if active_names is not None:
+                if (
+                    normalized_name not in active_names
+                    or normalized_name in seen_names
+                ):
+                    continue
+                seen_names.add(normalized_name)
+            devices.append((index, repaired_name))
         return devices
     finally:
         audio.terminate()

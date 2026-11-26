@@ -10,6 +10,7 @@ cffi==2.1.1
 click==8.5.0
 cloudpickle==3.1.2
 colorama==0.4.6
+comtypes==1.5.0; sys_platform == "win32"
 Django==6.1.1
 edge-tts==7.3.1
 filelock==4.0.12
@@ -35,7 +36,9 @@ numpy==2.5.3
 packaging==26.3
 pluggy==1.6.0
 propcache==0.5.4
+psutil==7.2.2; sys_platform == "win32"
 PyAudio==0.2.14
+pycaw==20260927; sys_platform == "win32"
 pycparser==3.0
 pygame==2.6.1
 PyQt6>=6.8,<7.0

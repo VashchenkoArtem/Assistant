@@ -45,8 +45,11 @@ VOICE_STATE_LOCK = threading.Lock()
 GUI_TEXT_MODE = threading.Event()
 _active_voice_requests = 0
 _voice_generation = 0
+_voice_activity_generation = 0
 _current_voice_text = ""
 _mixer_device_name: str | None = None
+VOICE_IDLE = threading.Event()
+VOICE_IDLE.set()
 
 
 def _set_current_voice_text(text: str) -> None:
@@ -79,18 +82,22 @@ def is_current_voice_transcript(text: str) -> bool:
 
 
 def _mark_voice_request_started():
-    global _active_voice_requests
+    global _active_voice_requests, _voice_activity_generation
     with VOICE_STATE_LOCK:
         _active_voice_requests += 1
+        _voice_activity_generation += 1
         VOICE_ACTIVE.set()
+        VOICE_IDLE.clear()
 
 
 def _mark_voice_request_finished():
-    global _active_voice_requests
+    global _active_voice_requests, _voice_activity_generation
     with VOICE_STATE_LOCK:
         _active_voice_requests -= 1
+        _voice_activity_generation += 1
         if _active_voice_requests == 0:
             VOICE_ACTIVE.clear()
+            VOICE_IDLE.set()
 
 
 def _is_current_voice_generation(generation: int) -> bool:
@@ -255,15 +262,33 @@ def listen_for_audio(
     recognizer: object,
     source: object,
     phrase_time_limit: float = PHRASE_TIME_LIMIT,
+    stop_event: threading.Event | None = None,
 ):
+    while True:
+        if stop_event is not None and stop_event.is_set():
+            return None
+        VOICE_IDLE.wait(timeout=0.1)
+        with VOICE_STATE_LOCK:
+            if _active_voice_requests == 0:
+                activity_generation = _voice_activity_generation
+                break
+
     try:
-        return recognizer.listen(
+        audio = recognizer.listen(
             source=source,
             timeout=1,
             phrase_time_limit=phrase_time_limit,
         )
     except Exception:
         return None
+
+    with VOICE_STATE_LOCK:
+        if (
+            _active_voice_requests > 0
+            or activity_generation != _voice_activity_generation
+        ):
+            return None
+    return audio
 
 
 def interrupt_voice() -> None:
