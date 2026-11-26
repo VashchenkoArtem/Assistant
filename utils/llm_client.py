@@ -329,8 +329,24 @@ def _request_provider(
         with urllib.request.urlopen(request, timeout=API_TIMEOUT_SECONDS) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
-        if error.code in (401, 403):
-            raise _LLMRequestError(INVALID_KEY_MESSAGE, "invalid_key") from error
+        if error.code == 401:
+            message = (
+                "Помилка авторизації LLM API (HTTP 401). "
+                "Перевірте API-ключ: він має бути активним і належати цьому провайдеру."
+            )
+            detail = _http_error_detail(error, api_key)
+            if detail:
+                message = f"{message} {detail}"
+            raise _LLMRequestError(message, "invalid_key") from error
+        if error.code == 403:
+            message = (
+                "Доступ до LLM API заборонено (HTTP 403). "
+                "Перевірте права ключа та доступ до вибраної моделі."
+            )
+            detail = _http_error_detail(error, api_key)
+            if detail:
+                message = f"{message} {detail}"
+            raise _LLMRequestError(message, "fatal") from error
         if error.code == 429:
             raise _LLMRequestError(RATE_LIMIT_MESSAGE, "quota") from error
         if error.code == 408 or 500 <= error.code < 600:
@@ -391,6 +407,62 @@ def _record_invalid_key(provider_id: str, api_key: str) -> None:
 def _record_provider_cooldown(provider_id: str, now: float) -> None:
     with _ROUTER_LOCK:
         _PROVIDER_COOLDOWNS[provider_id] = now + PROVIDER_COOLDOWN_SECONDS
+
+
+def get_router_statuses() -> dict[str, dict[str, object]]:
+    """Return safe provider/key status data for the personalization UI."""
+    try:
+        preferences = load_preferences()
+        credentials = load_credentials()
+    except LLMConfigError:
+        return {}
+
+    provider_keys = {
+        provider_id: _provider_keys(provider_id, credentials)
+        for provider_id in preferences["provider_order"]
+    }
+    now = time.monotonic()
+    statuses: dict[str, dict[str, object]] = {}
+
+    with _ROUTER_LOCK:
+        for provider_id in preferences["provider_order"]:
+            keys = provider_keys.get(provider_id, [])
+            if not keys:
+                statuses[provider_id] = {"state": "missing", "seconds": 0}
+                continue
+
+            provider_cooldown = _PROVIDER_COOLDOWNS.get(provider_id, 0)
+            if provider_cooldown > now:
+                statuses[provider_id] = {
+                    "state": "cooldown",
+                    "seconds": max(1, ceil(provider_cooldown - now)),
+                }
+                continue
+
+            invalid_count = 0
+            key_cooldowns: list[float] = []
+            for api_key in keys:
+                identity = _key_identity(provider_id, api_key)
+                if identity in _INVALID_KEYS:
+                    invalid_count += 1
+                    continue
+                key_cooldown = _KEY_COOLDOWNS.get(identity, 0)
+                if key_cooldown > now:
+                    key_cooldowns.append(key_cooldown)
+
+            if invalid_count == len(keys):
+                statuses[provider_id] = {"state": "invalid", "seconds": 0}
+            elif key_cooldowns and len(key_cooldowns) == len(keys):
+                statuses[provider_id] = {
+                    "state": "cooldown",
+                    "seconds": max(1, ceil(min(key_cooldowns) - now)),
+                }
+            elif invalid_count:
+                statuses[provider_id] = {"state": "partial", "seconds": invalid_count}
+            else:
+                statuses[provider_id] = {"state": "ready", "seconds": 0}
+
+    return statuses
 
 
 def _no_candidate_message(

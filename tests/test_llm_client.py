@@ -80,6 +80,22 @@ def test_ask_llm_does_not_call_api_without_key(monkeypatch):
     urlopen.assert_not_called()
 
 
+def test_ask_llm_with_no_configured_providers_returns_message():
+    llm_config.save_preferences(
+        {
+            "fallback_enabled": True,
+            "provider_order": [],
+            "providers": {},
+        }
+    )
+
+    with patch.object(llm_client.urllib.request, "urlopen") as urlopen:
+        result = llm_client.ask_llm("Запит")
+
+    assert "LLM не налаштовано" in result
+    urlopen.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("status_code", "message"),
     [
@@ -132,6 +148,42 @@ def test_ask_llm_includes_sanitized_http_error_detail(monkeypatch):
     assert "HTTP 400" in result
     assert "Invalid request" in result
     assert api_key not in result
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message"),
+    [
+        (401, "HTTP 401"),
+        (403, "доступ до вибраної моделі"),
+    ],
+)
+def test_ask_llm_explains_auth_error_without_exposing_key(
+    status_code,
+    message,
+):
+    api_key = "gsk_sensitive-test-key"
+    llm_config.save_credentials({"groq": [api_key]})
+    error_body = json.dumps(
+        {"error": {"message": f"Access denied for {api_key}"}}
+    ).encode("utf-8")
+    error = urllib.error.HTTPError(
+        llm_client.GROQ_API_URL,
+        status_code,
+        "authorization failed",
+        Message(),
+        io.BytesIO(error_body),
+    )
+
+    with patch.object(
+        llm_client.urllib.request,
+        "urlopen",
+        side_effect=error,
+    ):
+        result = llm_client.ask_llm("Запит")
+
+    assert message in result
+    assert api_key not in result
+    assert "[ключ приховано]" in result
 
 
 def test_ask_llm_reports_connection_errors(monkeypatch):

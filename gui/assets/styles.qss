@@ -1,0 +1,137 @@
+QMainWindow, QWidget {
+    background: #080e1d;
+    color: #b5bdd4;
+    font-family: 'Segoe UI';
+    font-size: 11px;
+}
+QGroupBox {
+    border: 1px solid #1a2340;
+    border-radius: 6px;
+    margin-top: 8px;
+    padding-top: 10px;
+}
+QGroupBox::title { subcontrol-origin: margin; left: 8px; color: #b5bdd4; }
+QLineEdit, QListWidget {
+    background: #0c1326;
+    border: 1px solid #1a2340;
+    border-radius: 5px;
+    color: #c7cde0;
+    selection-background-color: #35446f;
+}
+QPushButton {
+    background: #11182a;
+    border: 1px solid #1a2340;
+    border-radius: 5px;
+    color: #c7cde0;
+    padding: 6px 10px;
+}
+QPushButton:hover { background: #151e32; }
+QCheckBox { color: #b5bdd4; }
+#llmSettingsPanel QGroupBox {
+    border: 1px solid #1a2340;
+    border-radius: 8px;
+    margin-top: 8px;
+}
+#llmSettingsPanel QGroupBox::title {
+    left: 10px;
+    color: #9da7c2;
+    font-size: 11px;
+}
+#llmSettingsTitle { color: #d6daf0; font-size: 14px; font-weight: bold; }
+#llmSettingsPanel { background: #080e1d; }
+#llmSecurityWarning {
+    background: #40291d;
+    border: 1px solid #a56b32;
+    border-radius: 7px;
+    color: #ffc778;
+    padding: 10px 12px;
+}
+#llmAvailabilityBanner {
+    background: #4a2020;
+    border: 1px solid #9e4545;
+    border-radius: 7px;
+    color: #ffc0b8;
+    padding: 10px 12px;
+}
+#llmProviderOrder {
+    background: transparent;
+    border: none;
+}
+#llmProviderOrder::item {
+    background: transparent;
+    border: none;
+    height: 78px;
+}
+#llmProviderCard {
+    background: #0f1729;
+    border: 1px solid #1a2340;
+    border-radius: 7px;
+}
+#llmProviderCard[selected="true"] {
+    background: #151f37;
+    border: 1px solid #5367b8;
+}
+#llmProviderNumber {
+    background: #1b2744;
+    border-radius: 11px;
+    color: #b9c2dd;
+    font-weight: bold;
+}
+#llmProviderName { color: #cbd3ea; font-size: 12px; font-weight: bold; }
+#llmProviderModel, #llmProviderKeys { color: #8791aa; font-size: 10px; }
+#llmProviderStatusReady {
+    background: #1f7d68;
+    border-radius: 8px;
+    color: #baf5df;
+    padding: 3px 7px;
+}
+#llmProviderStatusMissing {
+    background: #30384b;
+    border-radius: 8px;
+    color: #b6bed3;
+    padding: 3px 7px;
+}
+#llmProviderStatusCooldown {
+    background: #b66a12;
+    border-radius: 8px;
+    color: #fff1cf;
+    padding: 3px 7px;
+}
+QLineEdit[invalid="true"] {
+    border: 1px solid #d85b5b;
+    background: #24151b;
+}
+QLabel[llmKeyError="true"] {
+    color: #ff8e8e;
+}
+#llmSaveButton { background: #35446f; color: #ffffff; }
+#llmSaveStatus { color: #8da2ff; }
+#llmUnsavedStatus { color: #ffc778; }
+#titleBar { background: #080d18; border-bottom: 1px solid #11182a; }
+#brand { color: #aeb6cc; font-size: 13px; padding-left: 10px; }
+#sidebar { background: #080d18; border-right: 1px solid #11182a; }
+QToolButton#sideButton, QToolButton[sideButton="true"] {
+    border: none; background: transparent; color: #747f9e;
+    font-size: 12px; min-width: 56px; min-height: 56px;
+}
+QToolButton#sideButton:hover, QToolButton#sideButton:checked {
+    background: #151e32; color: #d6daf0; border-radius: 8px;
+}
+#searchBar { background: #080d18; border-bottom: 1px solid #11182a; min-height: 58px; }
+#searchField { background: transparent; border: none; color: #77809a; padding-left: 8px; }
+#searchButton { border: none; background: transparent; color: #596178; }
+#chatScroll, #chatViewport { background: #080e1d; border: none; }
+QScrollBar:vertical { border: none; background: #080e1d; width: 6px; }
+QScrollBar::handle:vertical { background: #1a2340; border-radius: 3px; }
+#assistantCard { background: transparent; }
+#userCard { background: #30384b; }
+#messageAuthor { color: #747c96; font-size: 12px; }
+#messageBody { color: #788199; font-size: 11px; }
+#messageTime { color: #46516b; font-size: 9px; }
+#messageStatus { color: #5167c6; font-size: 10px; }
+#composerArea { background: #080e1d; border-top: 1px solid #11182a; }
+#composer { background: #080d18; border: 1px solid #11182a; border-radius: 6px; min-height: 50px; }
+#micButton, #keyboardButton {
+    border: none; background: transparent; color: #9aa5c1;
+    min-width: 32px; min-height: 32px;
+}
