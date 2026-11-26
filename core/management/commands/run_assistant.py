@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 
 CANCEL_ACTION_WORDS = ("скасуй", "скасувати", "скасовую", "відміна", "відміни", "відмінити")
 LLM_TRIGGER_PATTERN = re.compile(
-    r"^\s*(?:/ai|ші|спитай|запитання)\b\s*",
+    r"^\s*/ai\b\s*",
     re.IGNORECASE,
 )
 APP_COMMAND_PATTERN = re.compile(
@@ -301,7 +301,7 @@ class Command(BaseCommand):
         if trigger_match is not None:
             prompt = text[trigger_match.end():].lstrip(" \t.,!?;:-").strip()
             if len(prompt) < 3:
-                self.stdout.write("Введіть запит після команди або ключового слова")
+                self.stdout.write("Введіть запит після команди /ai")
             else:
                 self.stdout.write(ask_llm(prompt))
             return

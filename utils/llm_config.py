@@ -16,7 +16,7 @@ DEFAULT_PROVIDERS = {
         "name": "Groq",
         "type": "openai_compatible",
         "api_url": "https://api.groq.com/openai/v1/chat/completions",
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-120b",
     },
     "gemini": {
         "name": "Google Gemini",
@@ -166,6 +166,45 @@ def load_credentials() -> dict[str, list[str]]:
     return credentials
 
 
+def validate_api_key(
+    provider_id: str,
+    key: str,
+    provider_type: str = "",
+    api_url: str = "",
+) -> str | None:
+    value = key.strip()
+    if not value:
+        return "Введіть API-ключ."
+    if value.startswith(("Bearer ", "Authorization:", "API_KEY=", "api_key=")):
+        return "Вставте тільки сам ключ, без «Bearer» та позначень змінної."
+    if any(character.isspace() for character in value):
+        return "API-ключ має бути одним рядком без пробілів і переносів."
+    lower = value.lower()
+    if any(marker in lower for marker in ("requests.post(", "api_key=", "authorization")):
+        return "Вставте тільки API-ключ, а не фрагмент коду."
+    if len(value) < 8:
+        return "API-ключ занадто короткий."
+
+    provider_prefixes = {
+        "groq": ("gsk_",),
+        "gemini": ("AIza",),
+    }
+    if "anthropic.com" in api_url:
+        provider_prefixes[provider_id] = ("sk-ant-",)
+    elif "integrate.api.nvidia.com" in api_url:
+        provider_prefixes[provider_id] = ("nvapi-",)
+    elif provider_type == "anthropic":
+        provider_prefixes[provider_id] = ("sk-ant-",)
+    prefixes = provider_prefixes.get(provider_id, ())
+    if prefixes and not value.startswith(prefixes):
+        names = {
+            "groq": "Groq",
+            "gemini": "Google Gemini",
+        }
+        return f"Ключ для {names[provider_id]} має починатися з «{prefixes[0]}»."
+    return None
+
+
 def save_credentials(credentials: dict[str, list[str]]) -> None:
     normalized: dict[str, list[str]] = {}
     for provider, keys in credentials.items():
@@ -243,7 +282,6 @@ def load_preferences() -> LLMPreferences:
         }
     if (
         not isinstance(raw_providers, dict)
-        or not raw_providers
         or any(not _is_valid_provider_id(provider) for provider in raw_providers)
     ):
         raise LLMConfigError("Список провайдерів LLM має некоректний формат.")
@@ -279,7 +317,6 @@ def save_preferences(preferences: dict[str, Any]) -> None:
     fallback_enabled = preferences.get("fallback_enabled")
     if (
         not isinstance(providers, dict)
-        or not providers
         or any(not _is_valid_provider_id(provider) for provider in providers)
         or not isinstance(provider_order, list)
         or any(

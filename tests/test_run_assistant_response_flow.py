@@ -85,9 +85,6 @@ def test_recognizer_is_calibrated_and_keeps_short_phrases():
 @pytest.mark.parametrize(
     ("text", "prompt"),
     [
-        ("Спитай що таке REST API", "що таке REST API"),
-        ("ШІ поясни різницю між TCP та UDP", "поясни різницю між TCP та UDP"),
-        ("ЗАПИТАННЯ: коли з'явився Python?", "коли з'явився Python?"),
         ("/ai Що таке REST API?", "Що таке REST API?"),
         ("/AI: поясни рекурсію", "поясни рекурсію"),
     ],
@@ -111,7 +108,7 @@ def test_llm_trigger_writes_text_response_without_speaking(text, prompt):
     speak.assert_not_called()
 
 
-@pytest.mark.parametrize("text", ["ші", "Спитай", "Запитання: аб", "/ai", "/AI: аб"])
+@pytest.mark.parametrize("text", ["/ai", "/AI: аб"])
 def test_llm_trigger_requires_at_least_three_prompt_characters(text):
     command = Command()
     with patch.object(run_assistant, "sync_installed_apps"):
@@ -126,12 +123,35 @@ def test_llm_trigger_requires_at_least_three_prompt_characters(text):
         command.process_recognized_command(text)
 
     ask_llm.assert_not_called()
-    command.stdout.write.assert_any_call(
-        "Введіть запит після команди або ключового слова"
-    )
+    command.stdout.write.assert_any_call("Введіть запит після команди /ai")
 
 
-@pytest.mark.parametrize("text", ["спитай що таке REST API", "/ai що таке REST API"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "спитай що таке REST API",
+        "ШІ поясни різницю між TCP та UDP",
+        "запитання: коли з'явився Python?",
+        "звичайний текст /ai що таке REST API",
+    ],
+)
+def test_llm_trigger_is_only_available_through_ai_command(text):
+    command = Command()
+    with patch.object(run_assistant, "sync_installed_apps"):
+        command.initialize_for_text()
+    command.stdout = Mock()
+
+    with (
+        patch.object(run_assistant, "ask_llm") as ask_llm,
+        patch.object(run_assistant, "VOICE_ACTIVE") as voice_active,
+    ):
+        voice_active.is_set.return_value = False
+        command.process_recognized_command(text)
+
+    ask_llm.assert_not_called()
+
+
+@pytest.mark.parametrize("text", ["/ai що таке REST API"])
 def test_pending_dialog_takes_priority_over_llm_trigger(text):
     command = Command()
     with patch.object(run_assistant, "sync_installed_apps"):
