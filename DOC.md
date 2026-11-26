@@ -10,7 +10,10 @@
 | --- | --- |
 | `python -m gui` | Запустити графічний інтерфейс |
 | `python manage.py run_assistant` | Запустити голосовий режим у терміналі |
+| `python manage.py runserver 127.0.0.1:8000` | Запустити локальний HTTP API; GUI його не використовує |
 | `python manage.py migrate` | Створити або оновити Django-таблиці |
+
+HTTP API надає `GET /api/assistant/health/` і `POST /api/assistant/command/`.
 
 ## Архітектура виконання
 
