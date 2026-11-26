@@ -1,8 +1,9 @@
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt, QThreadPool
+from PyQt6.QtCore import Qt, QThreadPool, QTimer
 from PyQt6.QtGui import QIcon, QKeySequence, QPixmap
 from PyQt6.QtWidgets import (
     QFrame,
@@ -49,6 +50,11 @@ class MainWindow(QMainWindow):
         self._model_loading_card: ChatCard | None = None
         self._command_queue: list[tuple[str, bool]] = []
         self._thread_pool = QThreadPool(self)
+        self._command_timer = QTimer(self)
+        self._command_timer.setInterval(50)
+        self._command_timer.timeout.connect(self._update_command_timer)
+        self._command_started_at: float | None = None
+        self._command_status_card: ChatCard | None = None
         self._voice_busy = False
         self._voice_worker: VoiceWorker | None = None
         self._voice_status_card: ChatCard | None = None
@@ -227,6 +233,13 @@ class MainWindow(QMainWindow):
 
     def _start_command(self, text: str, speak_answer: bool = False) -> None:
         self._command_busy = True
+        self._command_started_at = time.perf_counter()
+        self._command_status_card = self.chat.add_card(
+            "System",
+            "Виконую запит...",
+            status="Виконується · 0.0 мс",
+        )
+        self._command_timer.start()
         cancel_event = threading.Event()
         self._command_cancel_event = cancel_event
         worker = CommandWorker(
@@ -255,6 +268,15 @@ class MainWindow(QMainWindow):
     def _command_finished(self, _text: str, output: object) -> None:
         self.chat.remove_card(self._model_loading_card)
         self._model_loading_card = None
+        elapsed = self._stop_command_timer()
+        if isinstance(output, dict):
+            result = str(output.get("output") or "")
+            worker_elapsed = output.get("elapsed")
+            if isinstance(worker_elapsed, (int, float)):
+                elapsed = max(0.0, float(worker_elapsed))
+        else:
+            result = str(output or "")
+
         cancel_requested = (
             self._command_cancel_event is not None
             and self._command_cancel_event.is_set()
@@ -265,24 +287,65 @@ class MainWindow(QMainWindow):
             cancel_pending_action = getattr(self._command, "cancel_pending_action", None)
             if callable(cancel_pending_action):
                 cancel_pending_action(silent=True)
-            output = "Команду скасовано."
-        lines = str(output).strip().splitlines() if output else []
+            result = "Команду скасовано."
+        lines = result.strip().splitlines() if result else []
         lines = [
             line.strip()
             for line in lines
             if line.strip() and not line.strip().startswith("Ви сказали:")
         ]
         if lines:
-            self.chat.add_card("Поліна", "\n".join(lines))
+            self.chat.add_card(
+                "Поліна",
+                "\n".join(lines),
+                status=f"Виконано · {self._format_duration(elapsed)}",
+            )
+        else:
+            self.chat.add_card(
+                "Поліна",
+                "Команду виконано.",
+                status=f"Виконано · {self._format_duration(elapsed)}",
+            )
         self._command_queue.clear()
         self._start_next_queued_command()
 
-    def _command_failed(self, message: str) -> None:
+    @staticmethod
+    def _format_duration(elapsed: float) -> str:
+        safe_elapsed = max(0.0, elapsed)
+        if safe_elapsed < 1.0:
+            return f"{safe_elapsed * 1000:.1f} мс"
+        return f"{safe_elapsed:.2f} с"
+
+    def _update_command_timer(self) -> None:
+        if self._command_started_at is None or self._command_status_card is None:
+            return
+        elapsed = max(0.0, time.perf_counter() - self._command_started_at)
+        self._command_status_card.set_status(
+            f"Виконується · {self._format_duration(elapsed)}"
+        )
+
+    def _stop_command_timer(self) -> float:
+        self._command_timer.stop()
+        elapsed = 0.0
+        if self._command_started_at is not None:
+            elapsed = max(0.0, time.perf_counter() - self._command_started_at)
+            self._command_started_at = None
+        self.chat.remove_card(self._command_status_card)
+        self._command_status_card = None
+        return elapsed
+
+    def _command_failed(self, message: str, elapsed: float = 0.0) -> None:
         self.chat.remove_card(self._model_loading_card)
         self._model_loading_card = None
         self._command_busy = False
         self._command_cancel_event = None
-        self.chat.add_card("Система", f"Помилка виконання команди: {message}")
+        timer_elapsed = self._stop_command_timer()
+        final_elapsed = elapsed if elapsed > 0 else timer_elapsed
+        self.chat.add_card(
+            "Система",
+            f"Помилка виконання команди: {message}",
+            status=f"Помилка · {self._format_duration(final_elapsed)}",
+        )
         self._start_next_queued_command()
 
     def _start_next_queued_command(self) -> None:

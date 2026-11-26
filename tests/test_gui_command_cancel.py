@@ -62,6 +62,58 @@ def test_cancelled_worker_does_not_start_command_and_reports_cancellation():
     assert outputs == ["Команду скасовано."]
 
 
+def test_worker_reports_elapsed_time(monkeypatch):
+    class TimedCommand:
+        def process_recognized_command(self, text):
+            print(f"processed {text}")
+
+    times = iter((1.0, 1.375))
+    monkeypatch.setattr("gui.workers.time.perf_counter", lambda: next(times))
+    worker = CommandWorker(TimedCommand(), "command")
+    results = []
+    worker.signals.finished.connect(
+        lambda text, payload: results.append((text, payload))
+    )
+
+    worker.run()
+
+    assert results == [
+        ("command", {"output": "processed command", "elapsed": 0.375})
+    ]
+
+
+def test_finished_command_displays_worker_elapsed_time(qt_app):
+    window = MainWindow(command=CancelCommand())
+    with patch.object(window.chat, "add_card", wraps=window.chat.add_card) as add_card:
+        window._command_finished(
+            "command",
+            {"output": "done", "elapsed": 0.25},
+        )
+
+    add_card.assert_called_once_with(
+        "Поліна",
+        "done",
+        status="Виконано · 250.0 мс",
+    )
+    window.close()
+
+
+def test_finished_command_without_output_still_displays_elapsed_time(qt_app):
+    window = MainWindow(command=CancelCommand())
+    with patch.object(window.chat, "add_card", wraps=window.chat.add_card) as add_card:
+        window._command_finished(
+            "command",
+            {"output": "", "elapsed": 0.125},
+        )
+
+    add_card.assert_called_once_with(
+        "Поліна",
+        "Команду виконано.",
+        status="Виконано · 125.0 мс",
+    )
+    window.close()
+
+
 def test_cancel_requested_as_command_finishes_clears_pending_action(qt_app):
     command = CancelCommand()
     command.pending_file = {"awaiting_target": True}

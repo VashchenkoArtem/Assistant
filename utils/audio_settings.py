@@ -47,10 +47,36 @@ def save_audio_settings(
         raise OSError("Не вдалося зберегти налаштування звуку.")
 
 
+def _repair_microphone_name(name: str) -> str:
+    try:
+        return name.encode("cp1251").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return name
+
+
 def list_microphone_devices() -> list[tuple[int, str]]:
     import speech_recognition
 
-    return list(enumerate(speech_recognition.Microphone.list_microphone_names()))
+    pyaudio = speech_recognition.Microphone.get_pyaudio()
+    audio = pyaudio.PyAudio()
+    try:
+        devices = []
+        for index in range(audio.get_device_count()):
+            device_info = audio.get_device_info_by_index(index)
+            name = device_info["name"]
+            max_input_channels = device_info["maxInputChannels"]
+            if not isinstance(name, str) or not isinstance(
+                max_input_channels, (int, float)
+            ):
+                raise RuntimeError(
+                    f"Отримано некоректні дані для аудіопристрою {index}."
+                )
+            if max_input_channels <= 0:
+                continue
+            devices.append((index, _repair_microphone_name(name)))
+        return devices
+    finally:
+        audio.terminate()
 
 
 def list_output_devices() -> list[str]:

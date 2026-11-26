@@ -3,6 +3,7 @@ import io
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -19,7 +20,7 @@ from utils.voicing_answer import (
 
 class CommandSignals(QObject):
     finished = pyqtSignal(str, object)
-    error = pyqtSignal(str)
+    error = pyqtSignal(str, float)
     model_loading = pyqtSignal(bool)
 
 
@@ -85,6 +86,7 @@ class CommandWorker(QRunnable):
             self.signals.finished.emit(self.text, "Команду скасовано.")
             return
 
+        started_at = time.perf_counter()
         buffer = io.StringIO()
         semantic_analyzer = getattr(
             getattr(getattr(self.command, "response_analyzer", None), "decision_engine", None),
@@ -113,9 +115,15 @@ class CommandWorker(QRunnable):
                     self.command.process_recognized_command(self.text)
                 except InterruptedError:
                     print("Команду скасовано.")
-            self.signals.finished.emit(self.text, buffer.getvalue().strip())
+            output = buffer.getvalue().strip()
+            elapsed = max(0.0, time.perf_counter() - started_at)
+            self.signals.finished.emit(
+                self.text,
+                {"output": output, "elapsed": elapsed},
+            )
         except Exception as error:
-            self.signals.error.emit(str(error))
+            elapsed = max(0.0, time.perf_counter() - started_at)
+            self.signals.error.emit(str(error), elapsed)
         finally:
             if callable(set_loading_callback):
                 set_loading_callback(previous_loading_callback)

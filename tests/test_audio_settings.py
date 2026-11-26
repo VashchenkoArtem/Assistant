@@ -41,6 +41,49 @@ def test_audio_settings_reject_invalid_values(tmp_path, monkeypatch):
         audio_settings.save_audio_settings(-1, "", 101)
 
 
+def test_microphone_device_names_repair_mojibake_without_changing_valid_names(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    import speech_recognition
+
+    devices = [
+        {
+            "name": "РџРµСЂРµРЅР°Р·РЅР°С‡РµРЅРёРµ - Input",
+            "maxInputChannels": 2,
+        },
+        {"name": "Output only", "maxInputChannels": 0},
+        {"name": "Микрофон (Realtek(R) Audio)", "maxInputChannels": 1},
+    ]
+
+    class Audio:
+        terminated = False
+
+        def get_device_count(self):
+            return len(devices)
+
+        def get_device_info_by_index(self, index):
+            return devices[index]
+
+        def terminate(self):
+            self.terminated = True
+
+    audio = Audio()
+    pyaudio = SimpleNamespace(PyAudio=lambda: audio)
+    monkeypatch.setattr(
+        speech_recognition.Microphone,
+        "get_pyaudio",
+        staticmethod(lambda: pyaudio),
+    )
+
+    assert audio_settings.list_microphone_devices() == [
+        (0, "Переназначение - Input"),
+        (2, "Микрофон (Realtek(R) Audio)"),
+    ]
+    assert audio.terminated
+
+
 def test_audio_settings_page_is_internal_and_reuses_instance(monkeypatch):
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(

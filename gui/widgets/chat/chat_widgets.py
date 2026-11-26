@@ -1,7 +1,7 @@
 import math
 
 from PyQt6.QtCore import QRectF, Qt, QTimer
-from PyQt6.QtGui import QColor, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ...icon_loader import load_pixmap
@@ -59,7 +59,6 @@ class ChatCard(QFrame):
         layout.setContentsMargins(14, 12, 14, 10)
         layout.setSpacing(12)
 
-        # Ліва частина картки: аватар асистента або користувача.
         icon_label = QLabel()
         icon_label.setObjectName("cardIcon")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -70,9 +69,9 @@ class ChatCard(QFrame):
             icon_label.setText(icon)
         layout.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignTop)
 
-        # Права частина картки: заголовок, текст і час.
         text_layout = QVBoxLayout()
         text_layout.setSpacing(4)
+        self._status_label: QLabel | None = None
 
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
@@ -97,6 +96,7 @@ class ChatCard(QFrame):
             status_label.setObjectName("messageStatus")
             status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             header_layout.addWidget(status_label)
+            self._status_label = status_label
 
         text_layout.addLayout(header_layout)
 
@@ -116,3 +116,7 @@ class ChatCard(QFrame):
             text_layout.addWidget(time_label)
 
         layout.addLayout(text_layout, 1)
+
+    def set_status(self, status: str) -> None:
+        if self._status_label is not None:
+            self._status_label.setText(status)

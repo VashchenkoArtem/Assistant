@@ -371,6 +371,8 @@ class Command(BaseCommand):
                 self.handle_open_close(text=text, is_open=is_open)
             return
 
+        self.stdout.write(f"Не вдалося розпізнати команду: {text}")
+
     def handle_paused_command(self, text: str) -> None:
         lowered = text.strip().lower()
         if any(keyword in lowered for keyword in ["продовж", "продовжуй", "продовжи", "віднови"]):
