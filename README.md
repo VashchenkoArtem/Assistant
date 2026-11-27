@@ -4,6 +4,13 @@
 
 Polina is a desktop assistant that accepts Ukrainian text and voice commands, manages applications and files, and can respond with speech.
 
+## Склад команди / Members
+  - [Vashchenko Artem](https://github.com/VashchenkoArtem)
+  - [Subach Max](https://github.com/MaxS2010)
+  - [Ivan Mykhaylyuk](https://github.com/Ivan55555555555)
+  - [Alina Sorukhan](https://github.com/AlinaSoruhan)
+  - [Selifanov Max](https://github.com/MaksymmS)
+
 ## Зміст / Contents
 
 - [Поліна — голосовий асистент / Polina — Voice Assistant](#поліна--голосовий-асистент--polina--voice-assistant)
