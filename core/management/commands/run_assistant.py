@@ -2,6 +2,7 @@ from typing import Any, cast
 import logging
 import re
 import threading
+import time
 
 from utils.list_apps import get_list_installed_apps
 from django.core.management.base import BaseCommand
@@ -27,6 +28,8 @@ from utils.voicing_answer import (
     voicing_and_printing_answer,
 )
 from utils.file_explorer import (
+    FileSearchTimeoutError,
+    FILE_SEARCH_TIMEOUT_SECONDS,
     ExplorerTab,
     ExplorerWindow,
     close_explorer_window,
@@ -662,17 +665,20 @@ class Command(BaseCommand):
                 voicing_and_printing_answer(f"Вкажіть {label}, який потрібно відкрити.")
             return
 
-        folder = None
-        cancel_event = getattr(self, "cancel_event", None)
+        active_folder_path = None
+        cancel_event: threading.Event | None = getattr(self, "cancel_event", None)
         if current_folder:
             try:
-                folder = get_active_explorer_path()
-                if folder is None or not os.path.isdir(folder):
+                current_folder_path = get_active_explorer_path()
+                if (
+                    current_folder_path is None
+                    or not os.path.isdir(current_folder_path)
+                ):
                     voicing_and_printing_answer(
                         "Вкажіть потрібну папку у Провіднику та повторно надішліть запит."
                     )
                     return
-                targets = find_file_targets_in_folder(target, folder)
+                active_folder_path = current_folder_path
             except (OSError, RuntimeError, NotImplementedError) as error:
                 self.stdout.write(
                     self.style.WARNING(f"Помилка читання поточної папки: {error}")
@@ -681,34 +687,52 @@ class Command(BaseCommand):
                     "Не вдалося визначити поточну папку Провідника."
                 )
                 return
-        else:
-            targets = (
-                find_named_file_targets(target, cancellation_event=cancel_event)
-                if open_parent
-                else find_file_targets(
+
+        search_deadline = time.monotonic() + FILE_SEARCH_TIMEOUT_SECONDS
+        try:
+            if active_folder_path is not None:
+                targets = find_file_targets_in_folder(
                     target,
-                    expected_kind=kind,
+                    active_folder_path,
                     cancellation_event=cancel_event,
+                    deadline=search_deadline,
                 )
-            )
-        self._raise_if_cancelled()
-        if not targets:
-            roots = [folder] if folder is not None else None
+            else:
+                targets = (
+                    find_named_file_targets(
+                        target,
+                        cancellation_event=cancel_event,
+                        deadline=search_deadline,
+                    )
+                    if open_parent
+                    else find_file_targets(
+                        target,
+                        expected_kind=kind,
+                        cancellation_event=cancel_event,
+                        deadline=search_deadline,
+                    )
+                )
             suggestions = (
                 find_similar_file_targets(
                     target,
-                    roots=roots,
+                    roots=(
+                        [active_folder_path]
+                        if active_folder_path is not None
+                        else None
+                    ),
                     expected_kind=kind,
                     cancellation_event=cancel_event,
+                    deadline=search_deadline,
                 )
-                if current_folder
-                else find_similar_file_targets(
-                    target,
-                    expected_kind=kind,
-                    cancellation_event=cancel_event,
-                )
+                if not targets
+                else []
             )
-            self._raise_if_cancelled()
+        except FileSearchTimeoutError as error:
+            voicing_and_printing_answer(str(error))
+            return
+
+        self._raise_if_cancelled()
+        if not targets:
             if suggestions:
                 self.pending_file = {
                     "awaiting_selection": True,

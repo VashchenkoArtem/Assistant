@@ -12,6 +12,8 @@ from utils.file_explorer.operations import (
 )
 from utils.file_explorer.targets import (
     CURRENT_FOLDER_PHRASE,
+    FileSearchTimeoutError,
+    FILE_SEARCH_TIMEOUT_SECONDS,
     LOCATION_ALIASES,
     MAX_RESULTS,
     MAX_SEARCH_DEPTH,
@@ -28,6 +30,8 @@ from utils.file_explorer.targets import (
     _matches_target_name,
     _name_variants,
     _normalized_name,
+    _raise_if_cancelled,
+    _resolve_search_deadline,
     _search_roots,
     _standard_folder_path,
     find_file_targets,
@@ -43,9 +47,10 @@ def find_named_file_targets(
     target: str,
     roots: Iterable[str] | None = None,
     cancellation_event: threading.Event | None = None,
+    deadline: float | None = None,
 ) -> list[str]:
-    if cancellation_event is not None and cancellation_event.is_set():
-        raise InterruptedError("Пошук файлів скасовано")
+    deadline = _resolve_search_deadline(deadline)
+    _raise_if_cancelled(cancellation_event, deadline)
 
     cleaned_target = _clean_target(target)
     if not cleaned_target:
@@ -63,17 +68,16 @@ def find_named_file_targets(
     seen: set[str] = set()
     search_roots = roots if roots is not None else _folder_bases()
     for root in search_roots:
-        if cancellation_event is not None and cancellation_event.is_set():
-            raise InterruptedError("Пошук файлів скасовано")
+        _raise_if_cancelled(cancellation_event, deadline)
         if not os.path.isdir(root):
             continue
         for path in _iter_targets(
             root,
             cancellation_event=cancellation_event,
             max_depth=None,
+            deadline=deadline,
         ):
-            if cancellation_event is not None and cancellation_event.is_set():
-                raise InterruptedError("Пошук файлів скасовано")
+            _raise_if_cancelled(cancellation_event, deadline)
             if not os.path.isfile(path) or not _matches_target_name(path, target_name):
                 continue
             canonical_path = os.path.normcase(os.path.abspath(path))

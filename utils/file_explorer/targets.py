@@ -2,6 +2,7 @@ import os
 import platform
 import re
 import threading
+import time
 from collections.abc import Iterable
 
 from utils.text_similarity import partial_similarity, similarity
@@ -91,6 +92,13 @@ MAX_SEARCH_DEPTH = 4
 MAX_RESULTS = 5
 
 
+FILE_SEARCH_TIMEOUT_SECONDS = 60
+
+
+class FileSearchTimeoutError(TimeoutError):
+    pass
+
+
 SIMILARITY_THRESHOLD = 0.6
 
 
@@ -155,15 +163,35 @@ def _search_roots() -> list[str]:
     return list(dict.fromkeys(roots))
 
 
+def _resolve_search_deadline(deadline: float | None) -> float:
+    if deadline is not None:
+        return deadline
+    return time.monotonic() + FILE_SEARCH_TIMEOUT_SECONDS
+
+
+def _raise_if_cancelled(
+    cancellation_event: threading.Event | None,
+    deadline: float,
+) -> None:
+    if cancellation_event is not None and cancellation_event.is_set():
+        raise InterruptedError("Пошук файлів скасовано")
+    if time.monotonic() >= deadline:
+        raise FileSearchTimeoutError(
+            "Пошук файлів перервано: перевищено ліміт "
+            f"{FILE_SEARCH_TIMEOUT_SECONDS} секунд."
+        )
+
+
 def _iter_targets(
     root: str,
     cancellation_event: threading.Event | None = None,
     max_depth: int | None = 4,
+    deadline: float | None = None,
 ) -> Iterable[str]:
+    deadline = _resolve_search_deadline(deadline)
     root_depth = root.rstrip(os.sep).count(os.sep)
     for current_path, directories, files in os.walk(root):
-        if cancellation_event is not None and cancellation_event.is_set():
-            raise InterruptedError("Пошук файлів скасовано")
+        _raise_if_cancelled(cancellation_event, deadline)
         depth = current_path.rstrip(os.sep).count(os.sep) - root_depth
         if max_depth is not None:
             directories[:] = [
@@ -176,8 +204,10 @@ def _iter_targets(
                 directories.clear()
 
         for name in directories:
+            _raise_if_cancelled(cancellation_event, deadline)
             yield os.path.join(current_path, name)
         for name in files:
+            _raise_if_cancelled(cancellation_event, deadline)
             yield os.path.join(current_path, name)
 
 
@@ -226,9 +256,10 @@ def find_file_targets(
     roots: Iterable[str] | None = None,
     expected_kind: str | None = None,
     cancellation_event: threading.Event | None = None,
+    deadline: float | None = None,
 ) -> list[str]:
-    if cancellation_event is not None and cancellation_event.is_set():
-        raise InterruptedError("Пошук файлів скасовано")
+    deadline = _resolve_search_deadline(deadline)
+    _raise_if_cancelled(cancellation_event, deadline)
     cleaned_target = _clean_target(target)
     if not cleaned_target:
         return []
@@ -273,6 +304,7 @@ def find_file_targets(
         for path in _iter_targets(
             root,
             cancellation_event=cancellation_event,
+            deadline=deadline,
         ):
             if not _matches_target_name(path, target_name):
                 continue
@@ -283,6 +315,7 @@ def find_file_targets(
                 seen.add(canonical_path)
                 found.append(path)
                 if len(found) >= MAX_RESULTS:
+                    _raise_if_cancelled(cancellation_event, deadline)
                     return found
     return found
 
@@ -291,9 +324,10 @@ def find_named_file_targets(
     target: str,
     roots: Iterable[str] | None = None,
     cancellation_event: threading.Event | None = None,
+    deadline: float | None = None,
 ) -> list[str]:
-    if cancellation_event is not None and cancellation_event.is_set():
-        raise InterruptedError("Пошук файлів скасовано")
+    deadline = _resolve_search_deadline(deadline)
+    _raise_if_cancelled(cancellation_event, deadline)
 
     cleaned_target = _clean_target(target)
     if not cleaned_target:
@@ -311,14 +345,14 @@ def find_named_file_targets(
     seen: set[str] = set()
     search_roots = roots if roots is not None else _folder_bases()
     for root in search_roots:
-        if cancellation_event is not None and cancellation_event.is_set():
-            raise InterruptedError("Пошук файлів скасовано")
+        _raise_if_cancelled(cancellation_event, deadline)
         if not os.path.isdir(root):
             continue
         for path in _iter_targets(
             root,
             cancellation_event=cancellation_event,
             max_depth=None,
+            deadline=deadline,
         ):
             if not os.path.isfile(path):
                 continue
@@ -330,11 +364,19 @@ def find_named_file_targets(
             seen.add(canonical_path)
             found.append(path)
             if len(found) >= MAX_RESULTS:
+                _raise_if_cancelled(cancellation_event, deadline)
                 return found
     return found
 
 
-def find_file_targets_in_folder(target: str, folder: str) -> list[str]:
+def find_file_targets_in_folder(
+    target: str,
+    folder: str,
+    cancellation_event: threading.Event | None = None,
+    deadline: float | None = None,
+) -> list[str]:
+    deadline = _resolve_search_deadline(deadline)
+    _raise_if_cancelled(cancellation_event, deadline)
     cleaned_target = _clean_target(target)
     if not cleaned_target or not os.path.isdir(folder):
         return []
@@ -343,16 +385,18 @@ def find_file_targets_in_folder(target: str, folder: str) -> list[str]:
     if not target_name:
         return []
 
+    matches = []
     with os.scandir(folder) as entries:
-        matches = sorted(
-            (
-                entry.path
-                for entry in entries
-                if entry.is_file(follow_symlinks=False)
+        for entry in entries:
+            _raise_if_cancelled(cancellation_event, deadline)
+            if (
+                entry.is_file(follow_symlinks=False)
                 and _matches_target_name(entry.path, target_name)
-            ),
-            key=str.casefold,
-        )
+            ):
+                matches.append(entry.path)
+    _raise_if_cancelled(cancellation_event, deadline)
+    matches.sort(key=str.casefold)
+    _raise_if_cancelled(cancellation_event, deadline)
     return matches[:MAX_RESULTS]
 
 
@@ -361,9 +405,10 @@ def find_similar_file_targets(
     roots: Iterable[str] | None = None,
     expected_kind: str | None = None,
     cancellation_event: threading.Event | None = None,
+    deadline: float | None = None,
 ) -> list[str]:
-    if cancellation_event is not None and cancellation_event.is_set():
-        raise InterruptedError("Пошук файлів скасовано")
+    deadline = _resolve_search_deadline(deadline)
+    _raise_if_cancelled(cancellation_event, deadline)
     target_name = os.path.basename(_clean_target(target).rstrip("\\/"))
     query = _normalized_name(os.path.splitext(target_name)[0])
     if len(query) < 3:
@@ -378,6 +423,7 @@ def find_similar_file_targets(
         for path in _iter_targets(
             root,
             cancellation_event=cancellation_event,
+            deadline=deadline,
         ):
             if not _is_expected_kind(path, expected_kind):
                 continue
@@ -413,6 +459,7 @@ def find_similar_file_targets(
 
     if expected_kind != "file":
         for alias, folder_name in LOCATION_ALIASES.items():
+            _raise_if_cancelled(cancellation_event, deadline)
             if folder_name not in SEARCH_FOLDER_NAMES:
                 continue
 
@@ -441,5 +488,7 @@ def find_similar_file_targets(
                 ranked.append((score, path))
                 ranked_paths.add(canonical_path)
 
+    _raise_if_cancelled(cancellation_event, deadline)
     ranked.sort(key=lambda item: (-item[0], item[1].casefold()))
+    _raise_if_cancelled(cancellation_event, deadline)
     return [path for _score, path in ranked[:MAX_RESULTS]]

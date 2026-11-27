@@ -25,7 +25,7 @@ APP_KIND_PREFIX = re.compile(
 NON_ALPHANUMERIC = re.compile(r"[^\w]+", re.UNICODE)
 
 def get_known_apps():
-    apps = get_list_installed_apps()
+    apps = dict(get_list_installed_apps())
 
     commands = AppCommand.objects.all()
 

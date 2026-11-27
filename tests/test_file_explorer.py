@@ -1,6 +1,6 @@
 import os
 import threading
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 import pytest
 
@@ -20,6 +20,7 @@ from core.response_analysis import (
     ResponseSource,
 )
 from utils.file_explorer import (
+    FileSearchTimeoutError,
     ExplorerTab,
     ExplorerWindow,
     close_explorer_window,
@@ -147,6 +148,89 @@ def test_find_named_file_target_stops_when_cancelled_during_walk(tmp_path, monke
             roots=[str(tmp_path)],
             cancellation_event=cancel_event,
         )
+
+
+def test_find_named_file_target_stops_after_search_deadline(tmp_path, monkeypatch):
+    (tmp_path / "report.docx").touch()
+    moments = iter((0.0, 60.0))
+    monkeypatch.setattr(
+        "utils.file_explorer.targets.time.monotonic",
+        lambda: next(moments),
+    )
+
+    with pytest.raises(TimeoutError, match="60 секунд"):
+        find_named_file_targets(
+            "report.docx",
+            roots=[str(tmp_path)],
+            deadline=60.0,
+        )
+
+
+@pytest.mark.parametrize(
+    "search",
+    [find_file_targets, find_similar_file_targets],
+    ids=["exact-match", "similar-suggestions"],
+)
+def test_recursive_file_search_stops_after_search_deadline(
+    tmp_path,
+    monkeypatch,
+    search,
+):
+    (tmp_path / "report.docx").touch()
+    moments = iter((0.0, 60.0))
+    monkeypatch.setattr(
+        "utils.file_explorer.targets.time.monotonic",
+        lambda: next(moments),
+    )
+
+    with pytest.raises(TimeoutError, match="60 секунд"):
+        search(
+            "missing.docx",
+            roots=[str(tmp_path)],
+            expected_kind="file",
+            deadline=60.0,
+        )
+
+
+def test_current_folder_search_stops_after_search_deadline(tmp_path, monkeypatch):
+    (tmp_path / "first.docx").touch()
+    moments = iter((0.0, 60.0))
+    monkeypatch.setattr(
+        "utils.file_explorer.targets.time.monotonic",
+        lambda: next(moments),
+    )
+
+    with pytest.raises(TimeoutError, match="60 секунд"):
+        find_file_targets_in_folder(
+            "report.docx",
+            str(tmp_path),
+            deadline=60.0,
+        )
+
+
+def test_file_search_timeout_is_reported_without_opening_target():
+    command = make_command()
+    command.stdout = Mock()
+    timeout_error = FileSearchTimeoutError(
+        "Пошук файлів перервано: перевищено ліміт 60 секунд."
+    )
+
+    with (
+        patch.object(
+            run_assistant,
+            "find_file_targets",
+            side_effect=timeout_error,
+        ),
+        patch.object(run_assistant, "open_target") as open_target,
+        patch.object(
+            run_assistant,
+            "voicing_and_printing_answer",
+        ) as speak,
+    ):
+        command.handle_file_open("file", "report.docx")
+
+    speak.assert_called_once_with(str(timeout_error))
+    open_target.assert_not_called()
 
 
 def test_find_file_target_without_extension(tmp_path):
@@ -426,7 +510,11 @@ def test_find_file_command_opens_containing_folder(tmp_path):
     ):
         command.doing_task("знайди файл report.docx")
 
-    find_file.assert_called_once_with("report.docx", cancellation_event=None)
+    find_file.assert_called_once_with(
+        "report.docx",
+        cancellation_event=None,
+        deadline=ANY,
+    )
     open_target.assert_called_once_with(str(target.parent))
 
 
@@ -448,7 +536,11 @@ def test_find_file_command_keeps_search_mode_when_name_is_provided_later(tmp_pat
         assert command.pending_file["open_parent"] is True
         command.doing_task("report.docx")
 
-    find_file.assert_called_once_with("report.docx", cancellation_event=None)
+    find_file.assert_called_once_with(
+        "report.docx",
+        cancellation_event=None,
+        deadline=ANY,
+    )
     open_target.assert_called_once_with(str(target.parent))
 
 
@@ -667,7 +759,12 @@ def test_open_file_in_current_folder_uses_active_explorer_path(tmp_path):
     ):
         command.doing_task("відкрити файл report.docx у поточній папці")
 
-    find_in_current.assert_called_once_with("report.docx", str(tmp_path))
+    find_in_current.assert_called_once_with(
+        "report.docx",
+        str(tmp_path),
+        cancellation_event=None,
+        deadline=ANY,
+    )
     open_file.assert_called_once_with(report)
 
 
@@ -692,7 +789,12 @@ def test_current_folder_scope_is_preserved_when_file_name_is_requested_later(
         assert command.pending_file["current_folder"] is True
         command.doing_task("report.docx")
 
-    find_in_current.assert_called_once_with("report.docx", str(tmp_path))
+    find_in_current.assert_called_once_with(
+        "report.docx",
+        str(tmp_path),
+        cancellation_event=None,
+        deadline=ANY,
+    )
     open_file.assert_called_once_with(report)
 
 

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QScrollArea,
     QVBoxLayout,
@@ -78,6 +78,11 @@ class ChatPanel(QWidget):
         status: str | None = None,
         loading: bool = False,
     ) -> ChatCard:
+        scrollbar = self.scroll_area.verticalScrollBar()
+        was_at_bottom = (
+            scrollbar is not None
+            and scrollbar.value() >= scrollbar.maximum() - 2
+        )
         icon_name = "chat/user_ico.svg" if is_user else "chat/bot_ico.svg"
         if author == "System":
             icon_name = "chat/info.svg"
@@ -93,7 +98,7 @@ class ChatPanel(QWidget):
         )
         insert_at = max(0, self.chat_layout.count() - 1)
         self.chat_layout.insertWidget(insert_at, card)
-        self.scroll_to_bottom(force=is_user)
+        self.scroll_to_bottom(force=is_user or was_at_bottom)
         return card
 
     def scroll_to_bottom(self, force: bool = False) -> None:
@@ -103,6 +108,12 @@ class ChatPanel(QWidget):
             at_bottom = scrollbar.value() >= scrollbar.maximum() - 2
             if force or at_bottom:
                 scrollbar.setValue(scrollbar.maximum())
+                QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def _scroll_to_bottom(self) -> None:
+        scrollbar = self.scroll_area.verticalScrollBar()
+        if scrollbar is not None:
+            scrollbar.setValue(scrollbar.maximum())
 
     def remove_card(self, card: ChatCard | None) -> None:
         if card is None:
